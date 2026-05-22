@@ -111,6 +111,7 @@ pub fn run() {
             commands::get_active_encoder,
             commands::set_audio_config,
             commands::get_output_directory,
+            commands::set_pip_position,
         ])
         .setup(move |app| {
             // ----------------------------------------------------

@@ -13,7 +13,7 @@
 // ============================================================
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -22,6 +22,36 @@ use serde::{Deserialize, Serialize};
 
 use crate::capture::Frame;
 use crate::encoder::Encoder;
+
+/// Position de l'incrustation webcam dans la frame écran.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PipPosition {
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    #[default]
+    BottomRight,
+}
+
+impl PipPosition {
+    pub fn from_u8(v: u8) -> Self {
+        match v {
+            0 => PipPosition::TopLeft,
+            1 => PipPosition::TopRight,
+            2 => PipPosition::BottomLeft,
+            _ => PipPosition::BottomRight,
+        }
+    }
+    pub fn to_u8(self) -> u8 {
+        match self {
+            PipPosition::TopLeft     => 0,
+            PipPosition::TopRight    => 1,
+            PipPosition::BottomLeft  => 2,
+            PipPosition::BottomRight => 3,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -77,6 +107,8 @@ pub struct RecorderState {
     /// D5 — frame webcam déjà mise à la taille PiP (BGRA8). Le worker vidéo
     /// la blitte sur chaque frame écran avant push à l'encoder.
     pub pip_buffer: Option<Arc<Mutex<Option<Frame>>>>,
+    /// Position de l'incrustation (partagée avec le worker vidéo via AtomicU8).
+    pub pip_position: Arc<AtomicU8>,
 
     pub video_worker:  Option<JoinHandle<()>>,
     pub audio_worker:  Option<JoinHandle<()>>,
@@ -106,6 +138,7 @@ impl Default for RecorderState {
             pause_started_at: None,
             encoder_arc: None,
             pip_buffer: None,
+            pip_position: Arc::new(AtomicU8::new(PipPosition::BottomRight.to_u8())),
             video_worker:  None,
             audio_worker:  None,
             webcam_worker: None,

@@ -174,12 +174,22 @@
         </div>
         <div class="pop-row">
           <span class="pop-label">Activer la webcam (PiP)</span>
-          <label class="toggle" title="Incrustation webcam en bas-droite">
+          <label class="toggle" title="Incrustation webcam">
             <input type="checkbox" id="chk-webcam">
             <span class="track"></span>
           </label>
         </div>
         <div class="pop-devices" id="webcam-devices"></div>
+        <div class="pop-sep pip-pos-ctrl" id="pip-pos-sep" style="display:none"></div>
+        <div class="pop-row pip-pos-ctrl" id="pip-pos-row" style="display:none">
+          <span class="pop-label">Position de l'incrustation</span>
+        </div>
+        <div class="pip-grid pip-pos-ctrl" id="pip-pos-grid" style="display:none" aria-label="Position PiP">
+          <button class="pip-corner" data-pos="top_left"     title="Haut gauche">↖</button>
+          <button class="pip-corner" data-pos="top_right"    title="Haut droite">↗</button>
+          <button class="pip-corner" data-pos="bottom_left"  title="Bas gauche">↙</button>
+          <button class="pip-corner" data-pos="bottom_right" title="Bas droite">↘</button>
+        </div>
       </div>
 
       <!-- Popover Screen (multi-écran) -->

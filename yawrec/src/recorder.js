@@ -138,6 +138,11 @@ export class Recorder {
     catch (err) { this._onError(err); }
   }
 
+  async setPipPosition(position) {
+    try { await invoke("set_pip_position", { position }); }
+    catch (err) { this._onError(err); }
+  }
+
   // ---------- Audio config ----------
   async setAudioConfig(micEnabled, loopbackEnabled, micDevice = null) {
     try {

@@ -530,6 +530,34 @@ html, body {
   background: #fff;
 }
 
+/* Sélecteur de position PiP (2×2 grille dans le popover webcam) */
+.pip-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  padding: 2px 0 6px;
+}
+.pip-corner {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 5px;
+  color: var(--text-muted);
+  font-size: 15px;
+  padding: 5px 0;
+  cursor: pointer;
+  transition: background 100ms, border-color 100ms, color 100ms;
+  line-height: 1;
+}
+.pip-corner:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-secondary);
+}
+.pip-corner.active {
+  border-color: var(--accent-blue);
+  background: rgba(0, 122, 255, 0.14);
+  color: var(--accent-blue);
+}
+
 /* Griser les boutons de mode non implémentés */
 .mode-seg button.unimplemented {
   opacity: 0.28;

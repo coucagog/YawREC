@@ -11,7 +11,7 @@
 // ============================================================
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -24,7 +24,7 @@ use crate::capture::webcam::PIP_MARGIN;
 use crate::capture::{audio, screen, webcam, Frame};
 use crate::encoder::{Encoder, EncoderConfig, VideoEncoder};
 use crate::error::{YawrecError, YawrecResult};
-use crate::state::{CaptureMode, RecorderState, RecordingPhase};
+use crate::state::{CaptureMode, PipPosition, RecorderState, RecordingPhase};
 
 // ============================================================
 // Payloads IPC
@@ -83,7 +83,21 @@ fn human_size(bytes: u64) -> String {
 // D5 — Compositing PiP webcam → écran
 // ============================================================
 
-/// Blitte la frame PiP en bas-droite de la frame écran.
+/// Calcule le coin haut-gauche de la vignette PiP selon la position choisie.
+fn pip_offset(screen_w: u32, screen_h: u32, pip_w: u32, pip_h: u32, pos: PipPosition) -> (usize, usize) {
+    let m = PIP_MARGIN as usize;
+    let x = match pos {
+        PipPosition::TopLeft | PipPosition::BottomLeft => m,
+        PipPosition::TopRight | PipPosition::BottomRight => screen_w as usize - pip_w as usize - m,
+    };
+    let y = match pos {
+        PipPosition::TopLeft | PipPosition::TopRight => m,
+        PipPosition::BottomLeft | PipPosition::BottomRight => screen_h as usize - pip_h as usize - m,
+    };
+    (x, y)
+}
+
+/// Blitte la frame PiP dans le coin choisi de la frame écran.
 ///
 /// Hypothèses :
 ///   - screen et pip sont en BGRA8 packé, sans padding ligne (stride = w*4)
@@ -91,7 +105,7 @@ fn human_size(bytes: u64) -> String {
 ///   - opacité = 1.0 (pas d'alpha blending) — on overwrite simplement
 ///
 /// Coût : ~360 KB memcpy à 60 fps = 22 MB/s, négligeable.
-fn composite_pip(screen: &mut [u8], screen_w: u32, screen_h: u32, pip: &Frame) {
+fn composite_pip(screen: &mut [u8], screen_w: u32, screen_h: u32, pip: &Frame, pos: PipPosition) {
     // Vérifications de borne : si l'écran est trop petit pour héberger
     // le PiP avec sa marge, on skip silencieusement.
     let total_pip_w = pip.width + 2 * PIP_MARGIN;
@@ -100,8 +114,7 @@ fn composite_pip(screen: &mut [u8], screen_w: u32, screen_h: u32, pip: &Frame) {
         return;
     }
 
-    let x_off = (screen_w - pip.width - PIP_MARGIN) as usize;
-    let y_off = (screen_h - pip.height - PIP_MARGIN) as usize;
+    let (x_off, y_off) = pip_offset(screen_w, screen_h, pip.width, pip.height, pos);
     let row_bytes = (pip.width * 4) as usize;
     let screen_stride = (screen_w * 4) as usize;
 
@@ -119,7 +132,7 @@ fn composite_pip(screen: &mut [u8], screen_w: u32, screen_h: u32, pip: &Frame) {
 
     // Bordure blanche 2 px autour du PiP — petite touche visuelle qui
     // sépare nettement la vignette du fond.
-    draw_pip_border(screen, screen_w, screen_h, pip.width, pip.height);
+    draw_pip_border(screen, screen_w, screen_h, pip.width, pip.height, pos);
 }
 
 fn draw_pip_border(
@@ -128,10 +141,12 @@ fn draw_pip_border(
     screen_h: u32,
     pip_w: u32,
     pip_h: u32,
+    pos: PipPosition,
 ) {
     const THICKNESS: u32 = 2;
-    let x_off = screen_w - pip_w - PIP_MARGIN;
-    let y_off = screen_h - pip_h - PIP_MARGIN;
+    let (x_off_usize, y_off_usize) = pip_offset(screen_w, screen_h, pip_w, pip_h, pos);
+    let x_off = x_off_usize as u32;
+    let y_off = y_off_usize as u32;
     let stride = (screen_w * 4) as usize;
 
     // Top et bottom : THICKNESS lignes pleines de (pip_w + 2*THICKNESS) px
@@ -185,6 +200,7 @@ struct VideoWorkerCtx {
     frame_count: Arc<AtomicU64>,
     encoder_arc: Arc<Mutex<Option<Encoder>>>,
     pip_buffer: Option<Arc<Mutex<Option<Frame>>>>,
+    pip_position: Arc<AtomicU8>,
     app: AppHandle,
 }
 
@@ -223,7 +239,8 @@ fn run_video_worker(ctx: VideoWorkerCtx) {
                 if let Some(pip_arc) = &ctx.pip_buffer {
                     if let Ok(guard) = pip_arc.lock() {
                         if let Some(pip) = guard.as_ref() {
-                            composite_pip(&mut frame.data, frame.width, frame.height, pip);
+                            let pos = PipPosition::from_u8(ctx.pip_position.load(Ordering::Relaxed));
+                            composite_pip(&mut frame.data, frame.width, frame.height, pip, pos);
                         }
                     }
                 }
@@ -357,7 +374,7 @@ pub async fn do_start_recording(app: &AppHandle) -> YawrecResult<()> {
     // Lock court : prépare l'état, clone les Arcs pour les workers
     let (stop_flag, audio_paused, paused_total_ms, byte_count, frame_count,
          screen_id, output_path, encoder_arc,
-         pip_buffer, webcam_idx,
+         pip_buffer, webcam_idx, pip_position,
          mic_enabled, loopback_enabled, mic_device_name) = {
         let mut s = state_mutex.lock().unwrap();
         if s.phase != RecordingPhase::Idle {
@@ -402,6 +419,7 @@ pub async fn do_start_recording(app: &AppHandle) -> YawrecResult<()> {
             enc_arc,
             pip_buf,
             webcam_idx,
+            Arc::clone(&s.pip_position),
             s.mic_enabled,
             s.loopback_enabled,
             s.mic_device_name.clone(),
@@ -421,6 +439,7 @@ pub async fn do_start_recording(app: &AppHandle) -> YawrecResult<()> {
             frame_count,
             encoder_arc: Arc::clone(&encoder_arc),
             pip_buffer: pip_buffer.as_ref().map(Arc::clone),
+            pip_position: Arc::clone(&pip_position),
             app: app.clone(),
         };
         std::thread::Builder::new()
@@ -811,4 +830,15 @@ pub async fn get_output_directory(
 ) -> YawrecResult<String> {
     let s = state.lock().unwrap();
     Ok(s.output_dir_display())
+}
+
+#[tauri::command]
+pub async fn set_pip_position(
+    position: PipPosition,
+    state: State<'_, Mutex<RecorderState>>,
+) -> YawrecResult<()> {
+    let s = state.lock().unwrap();
+    s.pip_position.store(position.to_u8(), Ordering::Relaxed);
+    log::debug!("set_pip_position → {:?}", position);
+    Ok(())
 }

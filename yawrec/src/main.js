@@ -186,6 +186,7 @@ document.getElementById("chk-loopback").addEventListener("change", async (e) => 
 
 let webcamEnabled = false;
 let selectedWebcamId = null;
+let pipPosition = localStorage.getItem("yawrec_pip_pos") || "bottom_right";
 
 document.getElementById("webcam-control").addEventListener("click", async (e) => {
   if (currentPopover === "popover-webcam") {
@@ -232,7 +233,29 @@ document.getElementById("chk-webcam").addEventListener("change", async (e) => {
   webcamEnabled = e.target.checked;
   document.getElementById("webcam-control").classList.toggle("webcam-active", webcamEnabled);
   document.getElementById("webcam-devices").style.display = webcamEnabled ? "" : "none";
+  setPipControlsVisible(webcamEnabled);
   await recorder.setWebcamEnabled(webcamEnabled);
+});
+
+// ============================================================
+// POSITION PiP — sélecteur 2×2
+// ============================================================
+
+function setPipControlsVisible(visible) {
+  document.querySelectorAll(".pip-pos-ctrl").forEach((el) => {
+    el.style.display = visible ? "" : "none";
+  });
+}
+
+document.querySelectorAll(".pip-corner").forEach((btn) => {
+  btn.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    pipPosition = btn.dataset.pos;
+    localStorage.setItem("yawrec_pip_pos", pipPosition);
+    document.querySelectorAll(".pip-corner").forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    await recorder.setPipPosition(pipPosition);
+  });
 });
 
 // ============================================================
@@ -343,6 +366,13 @@ async function init() {
   document.getElementById("chk-mic").checked = micEnabled;        // true
   document.getElementById("chk-loopback").checked = loopbackEnabled; // false
   document.getElementById("chk-webcam").checked = webcamEnabled;  // false
+
+  // Initialiser le sélecteur de position PiP
+  const activeCorner = document.querySelector(`.pip-corner[data-pos="${pipPosition}"]`);
+  if (activeCorner) activeCorner.classList.add("active");
+  await recorder.setPipPosition(pipPosition);
+  // Les contrôles de position sont masqués si webcam désactivée
+  setPipControlsVisible(webcamEnabled);
 
   // Ajouter le raccourci pause dans le footer
   const shortcutHint = document.querySelector(".win-footer .ft-item:last-child");
