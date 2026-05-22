@@ -19,7 +19,7 @@ use std::sync::OnceLock;
 use ffmpeg_next as ffmpeg;
 use ffmpeg::{
     codec, encoder as ff_encoder, format, frame,
-    software::{resampling, scaling},
+    software::scaling,
     util::{channel_layout::ChannelLayout, rational::Rational},
     Dictionary, Packet,
 };
@@ -221,7 +221,6 @@ struct VideoTrack {
 
 struct AudioTrack {
     encoder: ff_encoder::Audio,
-    resampler: resampling::Context,
     /// Buffer interleavé en F32 stéréo @48kHz, accumule jusqu'à frame_size*2.
     sample_buffer: VecDeque<f32>,
     frame_size: usize,    // samples par canal (généralement 1024 pour AAC)
@@ -418,30 +417,26 @@ impl Encoder {
                 .drain(..needed)
                 .collect();
 
-            // 1. Build un Audio frame interleavé f32 (Packed)
-            let mut packed = frame::Audio::new(
-                format::Sample::F32(format::sample::Type::Packed),
+            // De-interleave LRLRLR → planar [LL…] [RR…] manuellement.
+            // Le resampler swresample packed→planar produisait un canal R vide
+            // sur certains devices WASAPI (ex. C270 en stéréo-WASAPI).
+            let mut planar = frame::Audio::new(
+                format::Sample::F32(format::sample::Type::Planar),
                 audio.frame_size,
                 ChannelLayout::STEREO,
             );
-            packed.set_rate(self.audio_sample_rate);
+            planar.set_rate(self.audio_sample_rate);
 
-            let dst = packed.data_mut(0);
-            let byte_count = chunk.len() * std::mem::size_of::<f32>();
-            // SAFETY : f32 est trivially copyable, dst est aligné suffisamment
-            // pour des writes byte-à-byte ; on respecte la longueur exacte.
+            // SAFETY : f32 est trivially copyable, les slices sont correctement
+            // dimensionnés par ffmpeg-next (frame_size * 4 octets par plan).
             unsafe {
-                std::ptr::copy_nonoverlapping(
-                    chunk.as_ptr() as *const u8,
-                    dst.as_mut_ptr(),
-                    byte_count,
-                );
+                let dst_l = planar.data_mut(0).as_mut_ptr() as *mut f32;
+                let dst_r = planar.data_mut(1).as_mut_ptr() as *mut f32;
+                for i in 0..audio.frame_size {
+                    *dst_l.add(i) = chunk[i * 2];
+                    *dst_r.add(i) = chunk[i * 2 + 1];
+                }
             }
-
-            // 2. Resample (en réalité simple format-convert) vers FLTP planar
-            let mut planar = frame::Audio::empty();
-            audio.resampler.run(&packed, &mut planar)
-                .map_err(EncoderError::Ffmpeg)?;
 
             planar.set_pts(Some(audio.pts));
             audio.pts += audio.frame_size as i64;
@@ -648,17 +643,6 @@ fn open_audio_track(
     stream.set_time_base(Rational(1, config.audio_sample_rate as i32));
     let stream_idx = stream.index();
 
-    // Resampler : input = F32 packed @rate stereo, output = F32 planar @rate stereo
-    // (même rate, donc c'est juste un déentrelacement).
-    let resampler = resampling::Context::get(
-        format::Sample::F32(format::sample::Type::Packed),
-        layout,
-        config.audio_sample_rate,
-        format::Sample::F32(format::sample::Type::Planar),
-        layout,
-        config.audio_sample_rate,
-    ).map_err(EncoderError::Ffmpeg)?;
-
     log::info!(
         "Audio track · AAC @{}Hz stéréo, frame_size={}, {} kbps",
         config.audio_sample_rate, frame_size, config.audio_bitrate_kbps,
@@ -666,7 +650,6 @@ fn open_audio_track(
 
     Ok(AudioTrack {
         encoder: opened,
-        resampler,
         sample_buffer: VecDeque::with_capacity(frame_size * 4),
         frame_size,
         pts: 0,
