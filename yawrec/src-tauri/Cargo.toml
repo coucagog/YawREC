@@ -1,0 +1,75 @@
+[package]
+name = "yawrec"
+version = "0.1.0"
+description = "YawREC — mini enregistreur d'écran"
+authors = ["YawREC contributors"]
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "yawrec_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-global-shortcut = "2"
+
+# Sérialisation
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Async runtime
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+
+# Logs & erreurs
+log = "0.4"
+env_logger = "0.11"
+thiserror = "1"
+anyhow = "1"
+
+# ============================================================
+# Capture
+# ============================================================
+cpal = "0.15"
+# Webcam (D4) — nokhwa avec backends natifs :
+#   - Windows : MediaFoundation (rien à installer)
+#   - macOS   : AVFoundation (system framework)
+#   - Linux   : v4l2 (apt install libv4l-dev libudev-dev)
+nokhwa = { version = "0.10", features = ["input-native"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# DXGI Desktop Duplication — capture écran sans WinRT events (plus fiable sur Win 10)
+windows = { version = "0.61", features = [
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Foundation",
+] }
+# Webcam (D4) — MediaFoundation backend, déjà dispo sur Win 10/11.
+nokhwa = { version = "0.10", features = ["input-msmf"] }
+
+# ============================================================
+# Encodage (E1) — wrapper FFmpeg
+# ============================================================
+# Pré-requis build :
+#   - Windows : installer FFmpeg dev libs et exporter FFMPEG_DIR
+#     ex. `setx FFMPEG_DIR "C:\ffmpeg"` (le dossier doit contenir include/ et lib/)
+#   - Linux   : `sudo apt install libavcodec-dev libavformat-dev libavutil-dev libswscale-dev`
+#   - macOS   : `brew install ffmpeg pkg-config`
+ffmpeg-next = "8"
+
+[features]
+default = []
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = 3
+strip = true

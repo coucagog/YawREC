@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  YawREC · icône source 1024×1024
+  Style cohérent avec le design system YawREC :
+    - Fond sombre dégradé (charcoal)
+    - Y stylisé en blanc cassé
+    - Point REC rouge à la base, halo glow rouge
+  À convertir en PNG 1024×1024 puis passer dans `cargo tauri icon`.
+-->
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="bg" cx="0.5" cy="0.45" r="0.7">
+      <stop offset="0%"   stop-color="#3a3a3a"/>
+      <stop offset="100%" stop-color="#161616"/>
+    </radialGradient>
+    <linearGradient id="y-grad" x1="0.5" y1="0" x2="0.5" y2="1">
+      <stop offset="0%"   stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#cfcfcf"/>
+    </linearGradient>
+    <radialGradient id="rec-grad" cx="0.35" cy="0.3" r="0.7">
+      <stop offset="0%"   stop-color="#ff7676"/>
+      <stop offset="55%"  stop-color="#ef4444"/>
+      <stop offset="100%" stop-color="#b91c1c"/>
+    </radialGradient>
+    <filter id="rec-glow" x="-100%" y="-100%" width="300%" height="300%">
+      <feGaussianBlur stdDeviation="22" />
+    </filter>
+  </defs>
+
+  <!-- Fond avec coins arrondis comme icônes Win11 -->
+  <rect width="1024" height="1024" rx="180" ry="180" fill="url(#bg)"/>
+
+  <!-- Lueur rouge derrière le point REC -->
+  <circle cx="512" cy="720" r="80" fill="#ef4444"
+          opacity="0.45" filter="url(#rec-glow)"/>
+
+  <!-- Y stylisé : deux branches qui se rejoignent vers le bas, puis un fût vertical -->
+  <path d="
+    M 280 240
+    L 460 530
+    L 460 660
+    L 564 660
+    L 564 530
+    L 744 240
+    L 644 240
+    L 512 460
+    L 380 240
+    Z"
+    fill="url(#y-grad)"
+    stroke="#000000" stroke-width="0" />
+
+  <!-- Point REC rouge centré sous le Y -->
+  <circle cx="512" cy="720" r="58" fill="url(#rec-grad)"/>
+
+  <!-- Reflet blanc subtil sur le point REC -->
+  <ellipse cx="495" cy="700" rx="20" ry="10" fill="#ffffff" opacity="0.45"/>
+</svg>

@@ -1,0 +1,12 @@
+# Claude Code internal files
+.claude/
+
+# Session screenshots
+*.PNG
+*.png
+
+# Session notes
+REPRISE.md
+
+# FFmpeg DLLs (trop grandes pour GitHub, présentes dans C:\ffmpeg\bin\)
+yawrec/src-tauri/resources/ffmpeg-dlls/*.dll

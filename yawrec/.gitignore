@@ -1,0 +1,38 @@
+# ============================================================
+# YAWREC · .gitignore
+# ============================================================
+
+# --- Rust / Cargo ---
+src-tauri/target/
+src-tauri/Cargo.lock
+src-tauri/gen/
+
+# --- Node / Vite ---
+node_modules/
+dist/
+.npm/
+.eslintcache
+
+# --- Tauri ---
+src-tauri/WixTools/
+src-tauri/.tauri/
+
+# --- IDE ---
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Logs ---
+*.log
+logs/
+
+# --- Outputs en dev ---
+*.mp4
+*.webm
+*.mkv

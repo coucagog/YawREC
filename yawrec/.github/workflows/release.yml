@@ -1,0 +1,99 @@
+# =============================================================
+# YAWREC · workflow release
+# Déclenché sur push de tag v* → build Windows + publication
+# automatique en draft GitHub Release.
+# =============================================================
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust (stable-msvc)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install FFmpeg dev libs
+        shell: pwsh
+        run: |
+          $url = "https://github.com/GyanD/codexffmpeg/releases/download/7.1/ffmpeg-7.1-full_build-shared.7z"
+          $archive = "$env:RUNNER_TEMP\ffmpeg.7z"
+          Invoke-WebRequest -Uri $url -OutFile $archive
+          7z x $archive -o"$env:RUNNER_TEMP\ffmpeg" -y
+          $ff_dir = (Get-ChildItem "$env:RUNNER_TEMP\ffmpeg" -Directory)[0].FullName
+          "FFMPEG_DIR=$ff_dir" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "$ff_dir\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version "^2.0" --locked
+
+      - name: Install npm deps
+        run: npm ci
+
+      - name: Generate icons
+        shell: pwsh
+        run: |
+          # Si make-icons.ps1 a besoin d'un convertisseur SVG → PNG :
+          # on installe rsvg-convert via Chocolatey (préinstallé sur runners GH)
+          choco install librsvg --no-progress -y
+          .\scripts\make-icons.ps1
+
+      - name: Build
+        shell: pwsh
+        run: .\scripts\build.ps1 -SkipNpm
+
+      - name: Sign (optional, requires repository secrets)
+        if: ${{ env.WINDOWS_PFX_BASE64 != '' }}
+        shell: pwsh
+        env:
+          WINDOWS_PFX_BASE64: ${{ secrets.WINDOWS_PFX_BASE64 }}
+          WINDOWS_PFX_PASSWORD: ${{ secrets.WINDOWS_PFX_PASSWORD }}
+        run: |
+          $pfx = "$env:RUNNER_TEMP\cert.pfx"
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_PFX_BASE64))
+          $pw = ConvertTo-SecureString $env:WINDOWS_PFX_PASSWORD -AsPlainText -Force
+          .\scripts\sign.ps1 -PfxPath $pfx -PfxPassword $pw
+          Remove-Item $pfx -Force
+
+      - name: Collect artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          Get-ChildItem src-tauri\target\release\bundle -Recurse -File -Include "*.msi","*.exe" |
+            ForEach-Object { Copy-Item $_.FullName artifacts\ }
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: yawrec-windows-${{ github.ref_name }}
+          path: artifacts/
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          generate_release_notes: true
+          files: artifacts/*

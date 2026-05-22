@@ -1,0 +1,592 @@
+/* ============================================================
+   YAWREC · Windows 11 — feuille de style frontend
+   Adaptée de yawrec-windows.html pour le contexte Tauri/WebView2.
+   La fenêtre OS est gérée par Tauri (decorations: false, transparent: true) :
+   le body est donc transparent, c'est .win-window qui dessine la chrome.
+   ============================================================ */
+
+:root {
+  --rec-500: #ef4444;
+  --rec-600: #dc2626;
+  --rec-700: #b91c1c;
+  --rec-glow: rgba(239, 68, 68, 0.35);
+  --ok-500:  #4ade80;
+  --accent-blue: #60a5fa;
+  --close-red: #c42b1c;
+
+  --text-primary:   #f0f0f0;
+  --text-secondary: #d8d8d8;
+  --text-muted:     #999999;
+  --text-faint:     #888888;
+
+  --font-sans: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Mono", "Consolas", monospace;
+  --font-lcd:  "Share Tech Mono", "DSEG7 Classic", "Cascadia Mono",
+               ui-monospace, monospace;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  margin: 0;
+  /* Fond transparent : c'est Tauri qui pose le verre, .win-window pose la teinte */
+  background: transparent;
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* Pas de scroll dans la mini-fenêtre */
+  overflow: hidden;
+  user-select: none;
+}
+
+/* ============================================================
+   FENÊTRE PRINCIPALE — Mica acrylique
+   Remplit toute la WebView (la fenêtre OS est de la taille exacte)
+   ============================================================ */
+.win-window {
+  width: 100vw;
+  height: 100vh;
+  border-radius: 8px;
+  overflow: hidden;
+  background: linear-gradient(180deg,
+    rgba(32, 32, 32, 0.92) 0%,
+    rgba(24, 24, 24, 0.92) 100%);
+  backdrop-filter: blur(40px) saturate(180%);
+  -webkit-backdrop-filter: blur(40px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.04) inset,
+    0 24px 60px rgba(0, 0, 0, 0.55),
+    0 8px 20px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+/* État "enregistrement actif" : liseré rouge subtil autour de la fenêtre */
+.win-window.recording {
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.04) inset,
+    0 0 0 1px rgba(239, 68, 68, 0.45),
+    0 24px 60px rgba(0, 0, 0, 0.55),
+    0 8px 20px rgba(0, 0, 0, 0.35),
+    0 0 24px rgba(239, 68, 68, 0.18);
+  transition: box-shadow 240ms ease;
+}
+
+/* ============================================================
+   BARRE DE TITRE — drag region
+   ============================================================ */
+.win-titlebar {
+  height: 32px;
+  flex: 0 0 32px;
+  display: flex;
+  align-items: stretch;
+  background: transparent;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  user-select: none;
+  /* Tauri 2 : data-tauri-drag-region rend la zone "draggable" pour bouger la fenêtre */
+}
+
+.win-titlebar .title {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  letter-spacing: 0.1px;
+  pointer-events: none; /* Le drag-region s'applique sur le parent */
+}
+.win-titlebar .title svg.logo {
+  width: 14px; height: 14px;
+  color: var(--text-primary);
+  opacity: 0.95;
+}
+
+/* Point REC pulsant — masqué quand idle, visible quand recording */
+.rec-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--rec-500);
+  box-shadow: 0 0 6px var(--rec-glow);
+  display: inline-block;
+  opacity: 0;
+  transition: opacity 200ms ease;
+}
+.win-window.recording .rec-dot {
+  opacity: 1;
+  animation: pulse-dot 1.5s ease-in-out infinite;
+}
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1;   transform: scale(1); }
+  50%      { opacity: 0.4; transform: scale(0.92); }
+}
+
+/* Boutons système (les SEULS éléments cliquables de la titlebar : pas de drag dessus) */
+.win-sysbtns { display: flex; }
+.win-sysbtn {
+  width: 46px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: var(--text-secondary);
+  transition: background 120ms ease, color 120ms ease;
+  /* Empêcher le drag sur les boutons */
+  -webkit-app-region: no-drag;
+}
+.win-sysbtn:hover         { background: rgba(255, 255, 255, 0.06); }
+.win-sysbtn:active        { background: rgba(255, 255, 255, 0.04); }
+.win-sysbtn.close:hover   { background: var(--close-red); color: #fff; }
+.win-sysbtn.close:active  { background: #a82618; color: #fff; }
+.win-sysbtn svg { width: 10px; height: 10px; }
+
+/* ============================================================
+   CORPS — 5 zones
+   ============================================================ */
+.win-body {
+  flex: 1 1 auto;
+  display: grid;
+  grid-template-columns: 32% 18% 18% 18% 14%;
+  align-items: stretch;
+  position: relative;
+}
+.win-zone {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 14px;
+}
+.win-zone + .win-zone::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 18%;
+  height: 64%; width: 1px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+.stack .row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  transition: opacity 160ms ease;
+  opacity: 0.88;
+}
+.stack:hover .row { opacity: 1; }
+
+.lbl {
+  font-size: 11px;
+  color: var(--text-faint);
+  letter-spacing: 0.2px;
+}
+
+/* Timer */
+.win-timer {
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 6px;
+  padding: 12px 20px;
+  box-shadow: inset 0 0 18px rgba(0, 0, 0, 0.4);
+}
+.lcd {
+  font-family: var(--font-lcd);
+  font-size: 36px;
+  line-height: 1;
+  letter-spacing: 2px;
+  background: linear-gradient(180deg, #f5f5f5 0%, #d8d8d8 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  text-shadow: 0 0 8px rgba(255, 255, 255, 0.06);
+}
+
+.caret { width: 10px; height: 10px; color: #aaa; margin-left: 2px; }
+
+/* VU-mètre */
+.vu {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 14px;
+  margin-left: 4px;
+}
+.vu .bar {
+  width: 2px;
+  background: var(--ok-500);
+  border-radius: 1px;
+  transform-origin: bottom center;
+  box-shadow: 0 0 4px rgba(74, 222, 128, 0.45);
+  /* Animations désactivées par défaut, activées quand recording */
+}
+.vu .b1 { height: 4px; }
+.vu .b2 { height: 8px; }
+.vu .b3 { height: 12px; }
+.win-window.recording .vu .b1 { animation: vu1 0.55s ease-in-out infinite alternate; }
+.win-window.recording .vu .b2 { animation: vu2 0.45s ease-in-out infinite alternate; }
+.win-window.recording .vu .b3 { animation: vu3 0.50s ease-in-out infinite alternate; }
+@keyframes vu1 { from { transform: scaleY(0.35); } to { transform: scaleY(1); } }
+@keyframes vu2 { from { transform: scaleY(1);    } to { transform: scaleY(0.45); } }
+@keyframes vu3 { from { transform: scaleY(0.55); } to { transform: scaleY(0.95); } }
+
+/* Webcam (objectif stylisé) */
+.cam-icon {
+  width: 28px; height: 28px;
+  border-radius: 50%;
+  background: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow:
+    inset 0 0 0 2px #fff,
+    inset 0 0 0 4px #d8d8d8,
+    0 1px 2px rgba(0, 0, 0, 0.4);
+  position: relative;
+  transition: box-shadow 200ms ease;
+}
+.cam-icon::after {
+  content: "";
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%,
+    #ff7676 0%, var(--rec-500) 55%, #b91c1c 100%);
+  box-shadow: 0 0 4px rgba(239, 68, 68, 0.6);
+}
+
+/* D4 — état actif : lueur rouge autour de l'objectif, et label en blanc */
+.webcam-active .cam-icon {
+  box-shadow:
+    inset 0 0 0 2px #fff,
+    inset 0 0 0 4px #ffe0e0,
+    0 0 0 1px var(--rec-500),
+    0 0 12px rgba(239, 68, 68, 0.55);
+}
+.webcam-active .lbl {
+  color: #f0f0f0;
+}
+
+/* Mode segmenté */
+.mode-seg {
+  display: inline-flex;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 6px;
+  padding: 2px;
+}
+.mode-seg button {
+  width: 30px; height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  background: transparent;
+  border: none;
+  color: #aaa;
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease;
+}
+.mode-seg button:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.04);
+}
+.mode-seg button.active {
+  background: rgba(96, 165, 250, 0.18);
+  color: #fff;
+  box-shadow: inset 0 0 0 1px rgba(96, 165, 250, 0.28);
+}
+.mode-seg svg { width: 14px; height: 14px; }
+
+/* Bouton REC */
+.win-rec {
+  width: 56px; height: 56px;
+  border-radius: 50%;
+  border: none;
+  cursor: pointer;
+  position: relative;
+  background: radial-gradient(circle at 35% 30%,
+    #ff6b6b 0%, var(--rec-500) 45%, var(--rec-600) 100%);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.4),
+    0 0 18px 4px var(--rec-glow),
+    0 6px 14px rgba(220, 38, 38, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.25),
+    inset 0 -3px 6px rgba(0, 0, 0, 0.25);
+  transition: transform 140ms ease, box-shadow 140ms ease;
+}
+.win-rec:hover { transform: scale(1.04); }
+.win-rec:active { transform: scale(0.97); }
+/* État idle : disque plein. État recording : carré central blanc */
+.win-rec::after {
+  content: "";
+  position: absolute;
+  width: 18px; height: 18px;
+  background: #fff;
+  border-radius: 50%;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  box-shadow: 0 0 6px rgba(255, 255, 255, 0.5);
+  transition: width 200ms ease, height 200ms ease, border-radius 200ms ease;
+}
+.win-window.recording .win-rec::after {
+  width: 14px; height: 14px;
+  border-radius: 3px;
+}
+
+/* ============================================================
+   PIED DE PAGE
+   ============================================================ */
+.win-footer {
+  height: 28px;
+  flex: 0 0 28px;
+  background: rgba(0, 0, 0, 0.3);
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  gap: 14px;
+  color: var(--text-muted);
+  font-size: 11px;
+  letter-spacing: 0.2px;
+}
+.win-footer .ft-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: default;
+  transition: color 140ms ease;
+}
+.win-footer .ft-item:hover { color: var(--text-secondary); }
+.win-footer .ft-item svg { width: 12px; height: 12px; color: currentColor; }
+.win-footer .ft-spacer { flex: 1; }
+
+/* "ft-item" cliquable pour le dossier de sortie (ouvre le dialog) */
+#output-path-item { cursor: pointer; }
+
+.kbd {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: #bbb;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom-color: rgba(0, 0, 0, 0.4);
+  padding: 1px 6px;
+  border-radius: 3px;
+  line-height: 1;
+}
+
+/* ============================================================
+   POPOVERS — overlay sur .win-body (position: relative)
+   ============================================================ */
+.popover {
+  display: none;
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  background: rgba(14, 14, 16, 0.97);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  padding: 10px 16px 12px;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+}
+.popover.visible { display: flex; }
+
+.pop-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 7px;
+  margin-bottom: 5px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+.pop-close {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 11px;
+  width: 18px; height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  line-height: 1;
+  transition: background 120ms, color 120ms;
+}
+.pop-close:hover { background: rgba(255, 255, 255, 0.07); color: var(--text-primary); }
+
+.pop-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 0;
+  min-height: 28px;
+}
+.pop-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  letter-spacing: 0.1px;
+}
+.pop-sep {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.05);
+  margin: 4px 0;
+}
+
+/* Device radio list */
+.pop-devices {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding-left: 8px;
+  margin-bottom: 4px;
+}
+.pop-device {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--text-muted);
+  transition: background 100ms, color 100ms;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pop-device:hover { background: rgba(255, 255, 255, 0.05); color: var(--text-secondary); }
+.pop-device.selected { color: var(--accent-blue); }
+.pop-device::before {
+  content: "";
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  border: 1.5px solid currentColor;
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+.pop-device.selected::before {
+  background: currentColor;
+  opacity: 1;
+}
+
+/* Toggle switch */
+.toggle {
+  position: relative;
+  display: inline-block;
+  width: 34px;
+  height: 19px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.toggle input {
+  opacity: 0;
+  width: 0; height: 0;
+  position: absolute;
+}
+.toggle .track {
+  position: absolute;
+  inset: 0;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.13);
+  transition: background 200ms;
+}
+.toggle .track::after {
+  content: "";
+  position: absolute;
+  left: 2px; top: 1.5px;
+  width: 16px; height: 16px;
+  border-radius: 50%;
+  background: rgba(200, 200, 200, 0.9);
+  transition: transform 200ms;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+}
+.toggle input:checked + .track {
+  background: var(--accent-blue);
+}
+.toggle input:checked + .track::after {
+  transform: translateX(15px);
+  background: #fff;
+}
+
+/* Griser les boutons de mode non implémentés */
+.mode-seg button.unimplemented {
+  opacity: 0.28;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* Zone REC — flex row pour REC + Pause */
+.zone-rec {
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* Bouton Pause — petit, à gauche du REC */
+.win-pause {
+  width: 28px; height: 28px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(255, 255, 255, 0.6);
+  cursor: pointer;
+  display: none; /* masqué quand idle */
+  align-items: center;
+  justify-content: center;
+  transition: background 140ms ease, color 140ms ease, border-color 140ms ease;
+}
+.win-pause:hover {
+  background: rgba(255, 255, 255, 0.10);
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.35);
+}
+.win-pause:active { transform: scale(0.94); }
+.win-pause svg { width: 10px; height: 10px; }
+
+/* Afficher le bouton pause uniquement pendant l'enregistrement ou la pause */
+.win-window.recording .win-pause,
+.win-window.paused .win-pause {
+  display: inline-flex;
+}
+
+/* État pause — icône becomes play, liseré orange */
+.win-window.paused .win-rec {
+  background: radial-gradient(circle at 35% 30%,
+    #fbbf24 0%, #f59e0b 45%, #d97706 100%);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.4),
+    0 0 18px 4px rgba(245, 158, 11, 0.35),
+    0 6px 14px rgba(245, 158, 11, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.25),
+    inset 0 -3px 6px rgba(0, 0, 0, 0.25);
+}
+.win-window.paused .win-rec::after {
+  border-radius: 50%;
+  width: 18px; height: 18px;
+}
+
+/* Frame counter dans le footer */
+#frame-count-item {
+  transition: opacity 200ms ease;
+}

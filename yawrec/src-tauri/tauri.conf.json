@@ -1,0 +1,77 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "YawREC",
+  "version": "0.1.0",
+  "identifier": "app.yawrec.desktop",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devUrl": "http://localhost:5173",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "YawREC",
+        "width": 800,
+        "height": 240,
+        "minWidth": 800,
+        "minHeight": 240,
+        "maxWidth": 800,
+        "maxHeight": 240,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "center": true,
+        "shadow": true,
+        "skipTaskbar": false,
+        "visible": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis", "msi"],
+    "resources": {
+      "resources/ffmpeg-dlls/*": "."
+    },
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ],
+    "category": "Utility",
+    "shortDescription": "Mini enregistreur d'écran",
+    "longDescription": "YawREC capture votre écran, le son système, le micro et la webcam, avec une fenêtre flottante minimaliste.",
+    "publisher": "YawREC Project",
+    "copyright": "© 2026 YawREC contributors",
+    "homepage": "https://github.com/yawrec/yawrec",
+    "licenseFile": "../LICENSE",
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper",
+        "silent": true
+      },
+      "wix": {
+        "language": ["fr-FR", "en-US"],
+        "upgradeCode": "B6F8C2A4-9D31-4E5F-A1B2-3C4D5E6F7A8B"
+      },
+      "nsis": {
+        "displayLanguageSelector": false,
+        "languages": ["French", "English"],
+        "installMode": "currentUser",
+        "compression": "lzma",
+        "headerImage": null,
+        "sidebarImage": null
+      },
+      "signCommand": null
+    }
+  }
+}
