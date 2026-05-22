@@ -132,7 +132,7 @@ document.querySelectorAll(".pop-close").forEach((btn) => {
 
 let micEnabled = true;
 let loopbackEnabled = false; // OFF par défaut — activer manuellement si besoin
-let selectedMicName = null; // null = device par défaut
+let selectedMicName = localStorage.getItem("yawrec_mic") || null;
 
 document.getElementById("audio-control").addEventListener("click", async (e) => {
   if (currentPopover === "popover-audio") {
@@ -157,6 +157,7 @@ async function populateAudioPopover() {
     el.addEventListener("click", async (e) => {
       e.stopPropagation();
       selectedMicName = rawName;
+      localStorage.setItem("yawrec_mic", rawName);
       micList.querySelectorAll(".pop-device").forEach((x) => x.classList.remove("selected"));
       el.classList.add("selected");
       await recorder.setAudioConfig(micEnabled, loopbackEnabled, rawName);
@@ -325,6 +326,18 @@ async function init() {
     btn.classList.add("unimplemented");
     btn.title = "Non disponible dans cette version";
   });
+
+  // Auto-sélection du microphone : si rien de sauvegardé ou device disparu,
+  // prendre le premier mic disponible et l'appliquer immédiatement au backend.
+  const allDevices = await recorder.listAudioDevices();
+  const micNames = allDevices
+    .filter((d) => d.id.startsWith("input::"))
+    .map((d) => d.id.slice("input::".length));
+  if (micNames.length > 0 && (selectedMicName === null || !micNames.includes(selectedMicName))) {
+    selectedMicName = micNames[0];
+    localStorage.setItem("yawrec_mic", selectedMicName);
+  }
+  await recorder.setAudioConfig(micEnabled, loopbackEnabled, selectedMicName);
 
   // Sync état initial des toggles avec les valeurs par défaut
   document.getElementById("chk-mic").checked = micEnabled;        // true
