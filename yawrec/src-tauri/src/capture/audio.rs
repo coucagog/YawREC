@@ -369,16 +369,24 @@ fn convert_to_48k_stereo(input: &[f32], sample_rate: u32, channels: u16) -> Vec<
         1 => input.iter().flat_map(|&s| [s, s]).collect(),
         // Fold L+R → mono symétrique : règle les devices stéréo qui ne remplissent
         // qu'un seul canal (ex. webcam mic C270 via WASAPI qui envoie [signal, 0]).
-        2 => input.chunks_exact(2)
-            .flat_map(|pair| {
+        2 => {
+            let chunks = input.chunks_exact(2);
+            if !chunks.remainder().is_empty() {
+                log::warn!("convert_to_48k_stereo: {} sample(s) impairs droppés (2-ch)", chunks.remainder().len());
+            }
+            chunks.flat_map(|pair| {
                 let m = (pair[0] + pair[1]) * 0.5;
                 [m, m]
-            })
-            .collect(),
+            }).collect()
+        }
         n => {
             let n = n as usize;
+            let chunks = input.chunks_exact(n);
+            if !chunks.remainder().is_empty() {
+                log::warn!("convert_to_48k_stereo: {} sample(s) droppés ({}-ch)", chunks.remainder().len(), n);
+            }
             let mut out = Vec::with_capacity((input.len() / n) * 2);
-            for chunk in input.chunks_exact(n) {
+            for chunk in chunks {
                 let m = (chunk[0] + chunk[1]) * 0.5;
                 out.push(m);
                 out.push(m);

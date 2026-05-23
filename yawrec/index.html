@@ -184,11 +184,11 @@
         <div class="pop-row pip-pos-ctrl" id="pip-pos-row" style="display:none">
           <span class="pop-label">Position de l'incrustation</span>
         </div>
-        <div class="pip-grid pip-pos-ctrl" id="pip-pos-grid" style="display:none" aria-label="Position PiP">
-          <button class="pip-corner" data-pos="top_left"     title="Haut gauche">↖</button>
-          <button class="pip-corner" data-pos="top_right"    title="Haut droite">↗</button>
-          <button class="pip-corner" data-pos="bottom_left"  title="Bas gauche">↙</button>
-          <button class="pip-corner" data-pos="bottom_right" title="Bas droite">↘</button>
+        <div class="pip-grid pip-pos-ctrl" id="pip-pos-grid" style="display:none" role="group" aria-label="Position de l'incrustation">
+          <button class="pip-corner" data-pos="top_left"     aria-label="Haut gauche"  aria-pressed="false" title="Haut gauche">↖</button>
+          <button class="pip-corner" data-pos="top_right"    aria-label="Haut droite"  aria-pressed="false" title="Haut droite">↗</button>
+          <button class="pip-corner" data-pos="bottom_left"  aria-label="Bas gauche"   aria-pressed="false" title="Bas gauche">↙</button>
+          <button class="pip-corner" data-pos="bottom_right" aria-label="Bas droite"   aria-pressed="false" title="Bas droite">↘</button>
         </div>
       </div>
 

@@ -186,7 +186,9 @@ document.getElementById("chk-loopback").addEventListener("change", async (e) => 
 
 let webcamEnabled = false;
 let selectedWebcamId = null;
-let pipPosition = localStorage.getItem("yawrec_pip_pos") || "bottom_right";
+const PIP_POSITIONS = ["top_left", "top_right", "bottom_left", "bottom_right"];
+const _savedPos = localStorage.getItem("yawrec_pip_pos");
+let pipPosition = PIP_POSITIONS.includes(_savedPos) ? _savedPos : "bottom_right";
 
 document.getElementById("webcam-control").addEventListener("click", async (e) => {
   if (currentPopover === "popover-webcam") {
@@ -227,6 +229,7 @@ async function populateWebcamPopover() {
   }
 
   list.style.display = webcamEnabled ? "" : "none";
+  setPipControlsVisible(webcamEnabled);
 }
 
 document.getElementById("chk-webcam").addEventListener("change", async (e) => {
@@ -247,13 +250,20 @@ function setPipControlsVisible(visible) {
   });
 }
 
+function updatePipCornerActive(activePos) {
+  document.querySelectorAll(".pip-corner").forEach((b) => {
+    const isActive = b.dataset.pos === activePos;
+    b.classList.toggle("active", isActive);
+    b.setAttribute("aria-pressed", String(isActive));
+  });
+}
+
 document.querySelectorAll(".pip-corner").forEach((btn) => {
   btn.addEventListener("click", async (e) => {
     e.stopPropagation();
     pipPosition = btn.dataset.pos;
     localStorage.setItem("yawrec_pip_pos", pipPosition);
-    document.querySelectorAll(".pip-corner").forEach((b) => b.classList.remove("active"));
-    btn.classList.add("active");
+    updatePipCornerActive(pipPosition);
     await recorder.setPipPosition(pipPosition);
   });
 });
@@ -368,8 +378,7 @@ async function init() {
   document.getElementById("chk-webcam").checked = webcamEnabled;  // false
 
   // Initialiser le sélecteur de position PiP
-  const activeCorner = document.querySelector(`.pip-corner[data-pos="${pipPosition}"]`);
-  if (activeCorner) activeCorner.classList.add("active");
+  updatePipCornerActive(pipPosition);
   await recorder.setPipPosition(pipPosition);
   // Les contrôles de position sont masqués si webcam désactivée
   setPipControlsVisible(webcamEnabled);

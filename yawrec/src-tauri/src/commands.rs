@@ -88,11 +88,13 @@ fn pip_offset(screen_w: u32, screen_h: u32, pip_w: u32, pip_h: u32, pos: PipPosi
     let m = PIP_MARGIN as usize;
     let x = match pos {
         PipPosition::TopLeft | PipPosition::BottomLeft => m,
-        PipPosition::TopRight | PipPosition::BottomRight => screen_w as usize - pip_w as usize - m,
+        PipPosition::TopRight | PipPosition::BottomRight =>
+            (screen_w as usize).saturating_sub(pip_w as usize).saturating_sub(m),
     };
     let y = match pos {
         PipPosition::TopLeft | PipPosition::TopRight => m,
-        PipPosition::BottomLeft | PipPosition::BottomRight => screen_h as usize - pip_h as usize - m,
+        PipPosition::BottomLeft | PipPosition::BottomRight =>
+            (screen_h as usize).saturating_sub(pip_h as usize).saturating_sub(m),
     };
     (x, y)
 }
@@ -169,7 +171,7 @@ fn draw_pip_border(
     // Top + bottom bands
     for t in 0..THICKNESS {
         let yt = y0 + t;
-        let yb = y1 - t;
+        let yb = y1.saturating_sub(t);
         for x in x0..=x1 {
             set_px(x, yt);
             set_px(x, yb);
@@ -178,7 +180,7 @@ fn draw_pip_border(
     // Left + right bands
     for t in 0..THICKNESS {
         let xl = x0 + t;
-        let xr = x1 - t;
+        let xr = x1.saturating_sub(t);
         for y in y0..=y1 {
             set_px(xl, y);
             set_px(xr, y);
