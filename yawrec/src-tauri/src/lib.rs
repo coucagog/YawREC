@@ -120,6 +120,7 @@ pub fn run() {
             commands::open_region_picker,
             commands::set_video_quality,
             commands::get_video_quality,
+            commands::set_filename_prefix,
         ])
         .setup(move |app| {
             // ----------------------------------------------------

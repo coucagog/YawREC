@@ -172,6 +172,10 @@ function closeAllPopovers() {
   });
   const asp = document.getElementById("popover-autostop");
   if (asp) { asp.classList.remove("visible"); asp.setAttribute("aria-hidden", "true"); }
+  const outp = document.getElementById("popover-output");
+  if (outp) { outp.classList.remove("visible"); outp.setAttribute("aria-hidden", "true"); }
+  const qualp = document.getElementById("popover-quality");
+  if (qualp) { qualp.classList.remove("visible"); qualp.setAttribute("aria-hidden", "true"); }
   currentPopover = null;
 }
 
@@ -669,15 +673,89 @@ _asInput.addEventListener("blur", (e) => {
 });
 
 // ============================================================
-// DOSSIER DE SORTIE
+// SORTIE — dossier + préfixe du nom de fichier
 // ============================================================
 
-document.getElementById("output-path-item").addEventListener("click", async () => {
-  closeAllPopovers();
+let filenamePrefix = localStorage.getItem("yawrec_prefix") || "YawREC";
+
+function buildOutputPreview(prefix) {
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  const dateStr = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}`;
+  const timeStr = `${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
+  return `${prefix || "YawREC"}_${dateStr}_${timeStr}.mp4`;
+}
+
+function refreshOutputPopover() {
+  const pathEl   = document.getElementById("output-path-text");
+  document.getElementById("output-dir-display").textContent = pathEl.textContent;
+  document.getElementById("output-prefix-input").value      = filenamePrefix;
+  document.getElementById("output-preview").textContent     = buildOutputPreview(filenamePrefix);
+}
+
+// Ouvrir/fermer le popover depuis l'item footer
+document.getElementById("output-path-item").addEventListener("click", (e) => {
+  e.stopPropagation();
+  const pop = document.getElementById("popover-output");
+  if (pop.classList.contains("visible")) {
+    pop.classList.remove("visible");
+    pop.setAttribute("aria-hidden", "true");
+  } else {
+    closeAllPopovers();
+    refreshOutputPopover();
+    pop.classList.add("visible");
+    pop.setAttribute("aria-hidden", "false");
+  }
+});
+
+document.getElementById("output-close-btn").addEventListener("click", (e) => {
+  e.stopPropagation();
+  const pop = document.getElementById("popover-output");
+  pop.classList.remove("visible");
+  pop.setAttribute("aria-hidden", "true");
+});
+
+// Clic en dehors → fermer
+document.addEventListener("mousedown", (e) => {
+  const pop  = document.getElementById("popover-output");
+  const item = document.getElementById("output-path-item");
+  if (!pop.classList.contains("visible")) return;
+  if (!pop.contains(e.target) && !item.contains(e.target)) {
+    pop.classList.remove("visible");
+    pop.setAttribute("aria-hidden", "true");
+  }
+});
+
+// Bouton "Changer" → sélecteur de dossier
+document.getElementById("output-dir-btn").addEventListener("click", async (e) => {
+  e.stopPropagation();
   const path = await recorder.pickOutputDirectory();
   if (path) {
     document.getElementById("output-path-text").textContent = path;
+    document.getElementById("output-dir-display").textContent = path;
   }
+});
+
+// Input préfixe — mise à jour live du preview
+document.getElementById("output-prefix-input").addEventListener("input", (e) => {
+  document.getElementById("output-preview").textContent = buildOutputPreview(e.target.value);
+});
+
+// Appliquer sur Enter ou blur
+async function applyPrefix(value) {
+  const cleaned = value.trim() || "YawREC";
+  filenamePrefix = cleaned;
+  localStorage.setItem("yawrec_prefix", cleaned);
+  document.getElementById("output-preview").textContent = buildOutputPreview(cleaned);
+  document.getElementById("output-path-text").textContent = cleaned + "…";
+  await recorder.setFilenamePrefix(cleaned);
+}
+
+document.getElementById("output-prefix-input").addEventListener("keydown", async (e) => {
+  if (e.key === "Enter") { await applyPrefix(e.target.value); e.target.blur(); }
+});
+document.getElementById("output-prefix-input").addEventListener("blur", async (e) => {
+  await applyPrefix(e.target.value);
 });
 
 // ============================================================
@@ -701,9 +779,10 @@ async function init() {
     updateEncoderPillLabel(_encoderName);
   }
 
-  // Appliquer la qualité sauvegardée au backend
+  // Appliquer la qualité et le préfixe sauvegardés au backend
   await recorder.setVideoQuality(videoFps, videoBitrateKbps);
   updateQualityActive();
+  await recorder.setFilenamePrefix(filenamePrefix);
 
   // Le bouton région est maintenant actif (plus de classe "unimplemented")
 

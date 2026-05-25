@@ -239,6 +239,25 @@
       </div>
     </div>
 
+    <!-- ---------- Sortie — dossier + préfixe ---------- -->
+    <div id="popover-output" aria-hidden="true">
+      <div class="pop-header">
+        <span>Sortie</span>
+        <button class="pop-close" id="output-close-btn" aria-label="Fermer">✕</button>
+      </div>
+      <div class="pop-row">
+        <span class="pop-label">Dossier</span>
+        <button class="out-change-btn" id="output-dir-btn">Changer…</button>
+      </div>
+      <div class="output-dir-path" id="output-dir-display"></div>
+      <div class="pop-sep"></div>
+      <div class="pop-row">
+        <span class="pop-label">Préfixe</span>
+        <input type="text" id="output-prefix-input" maxlength="40" placeholder="YawREC">
+      </div>
+      <div class="output-preview" id="output-preview"></div>
+    </div>
+
     <!-- ---------- Qualité vidéo (popover footer encodeur) ---------- -->
     <div id="popover-quality" aria-hidden="true">
       <div class="pop-header">

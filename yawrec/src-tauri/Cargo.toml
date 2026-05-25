@@ -31,6 +31,7 @@ log = "0.4"
 env_logger = "0.11"
 thiserror = "1"
 anyhow = "1"
+chrono = { version = "0.4", features = ["clock"] }
 
 # ============================================================
 # Capture

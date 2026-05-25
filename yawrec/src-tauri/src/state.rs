@@ -86,6 +86,8 @@ pub struct RecorderState {
     /// Qualité vidéo : cadence cible et bitrate.
     pub video_fps: u32,
     pub video_bitrate_kbps: u32,
+    /// Préfixe du nom de fichier (ex. "YawREC" → "YawREC_2026-05-25_14-30-52.mp4").
+    pub filename_prefix: String,
 
     /// Audio
     pub mic_enabled: bool,
@@ -145,6 +147,7 @@ impl Default for RecorderState {
             selected_region: None,
             video_fps: 30,
             video_bitrate_kbps: 8000,
+            filename_prefix: "YawREC".to_string(),
             mic_enabled: true,
             loopback_enabled: false,
             mic_device_name: None,
@@ -186,11 +189,9 @@ impl RecorderState {
     }
 
     pub fn compute_output_path(&self) -> PathBuf {
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        let filename = format!("YawREC-{stamp}.mp4");
+        let prefix = if self.filename_prefix.is_empty() { "YawREC" } else { &self.filename_prefix };
+        let timestamp = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S");
+        let filename = format!("{prefix}_{timestamp}.mp4");
         match &self.output_dir {
             Some(d) => d.join(filename),
             None => {

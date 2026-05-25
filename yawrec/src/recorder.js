@@ -175,6 +175,11 @@ export class Recorder {
     catch (err) { this._onError(err); }
   }
 
+  async setFilenamePrefix(prefix) {
+    try { await invoke("set_filename_prefix", { prefix }); }
+    catch (err) { this._onError(err); }
+  }
+
   async getVideoQuality() {
     try { return await invoke("get_video_quality"); }
     catch (err) { this._onError(err); return null; }

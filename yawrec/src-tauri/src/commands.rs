@@ -1080,6 +1080,25 @@ pub async fn set_region(
 }
 
 // ============================================================
+// Préfixe du nom de fichier
+// ============================================================
+
+#[tauri::command]
+pub async fn set_filename_prefix(
+    prefix: String,
+    state: State<'_, Mutex<RecorderState>>,
+) -> YawrecResult<()> {
+    let clean: String = prefix
+        .chars()
+        .filter(|c| c.is_alphanumeric() || matches!(*c, '-' | '_' | ' ' | '.'))
+        .take(40)
+        .collect();
+    let mut s = state.lock().unwrap();
+    s.filename_prefix = clean;
+    Ok(())
+}
+
+// ============================================================
 // Qualité vidéo — fps + bitrate
 // ============================================================
 
