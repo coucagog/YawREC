@@ -18,6 +18,7 @@
 // ============================================================
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -87,6 +88,7 @@ pub struct AudioCapturer {
     loopback_buffer: Arc<Mutex<VecDeque<f32>>>,
     has_mic: bool,
     has_loopback: bool,
+    mic_gain: Arc<AtomicU32>,
 }
 
 impl AudioCapturer {
@@ -100,6 +102,7 @@ impl AudioCapturer {
         mic_enabled: bool,
         loopback_enabled: bool,
         mic_device_name: Option<&str>,
+        mic_gain: Arc<AtomicU32>,
     ) -> Result<Self, AudioError> {
         let host = cpal::default_host();
 
@@ -183,6 +186,7 @@ impl AudioCapturer {
             loopback_buffer,
             has_mic,
             has_loopback,
+            mic_gain,
         })
     }
 
@@ -209,8 +213,16 @@ impl AudioCapturer {
             if !ready { return None; }
         }
 
-        let mic_chunk  = if self.has_mic      { drain_chunk(&self.mic_buffer)      } else { None };
-        let loop_chunk = if self.has_loopback  { drain_chunk(&self.loopback_buffer) } else { None };
+        let mut mic_chunk  = if self.has_mic      { drain_chunk(&self.mic_buffer)      } else { None };
+        let loop_chunk     = if self.has_loopback  { drain_chunk(&self.loopback_buffer) } else { None };
+
+        // Gain micro appliqué avant mix (modificable en live via AtomicU32).
+        if let Some(ref mut m) = mic_chunk {
+            let gain = f32::from_bits(self.mic_gain.load(Ordering::Relaxed));
+            if (gain - 1.0).abs() > f32::EPSILON {
+                for s in m.iter_mut() { *s = (*s * gain).clamp(-1.0, 1.0); }
+            }
+        }
 
         if mic_chunk.is_none() && loop_chunk.is_none() {
             return None;

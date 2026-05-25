@@ -134,6 +134,9 @@ let micEnabled = true;
 let loopbackEnabled = false; // OFF par défaut — activer manuellement si besoin
 let selectedMicName = localStorage.getItem("yawrec_mic") || null;
 
+const _savedGain = parseFloat(localStorage.getItem("yawrec_mic_gain"));
+let micGain = isFinite(_savedGain) && _savedGain >= 0 ? _savedGain : 1.0;
+
 document.getElementById("audio-control").addEventListener("click", async (e) => {
   if (currentPopover === "popover-audio") {
     closeAllPopovers();
@@ -168,10 +171,32 @@ async function populateAudioPopover() {
   micList.style.display = micEnabled && mics.length > 0 ? "" : "none";
 }
 
+function gainToDb(gain) {
+  if (gain < 1e-4) return "-∞ dB";
+  const db = 20 * Math.log10(gain);
+  return (db >= 0 ? "+" : "") + db.toFixed(1) + " dB";
+}
+
+function updateGainLabel(gainLinear) {
+  document.getElementById("mic-gain-label").textContent = gainToDb(gainLinear);
+}
+
+function setGainRowVisible(visible) {
+  document.getElementById("mic-gain-row").classList.toggle("hidden", !visible);
+}
+
+document.getElementById("mic-gain-slider").addEventListener("input", async (e) => {
+  micGain = parseInt(e.target.value, 10) / 100;
+  localStorage.setItem("yawrec_mic_gain", String(micGain));
+  updateGainLabel(micGain);
+  await recorder.setMicGain(micGain);
+});
+
 document.getElementById("chk-mic").addEventListener("change", async (e) => {
   micEnabled = e.target.checked;
   const micList = document.getElementById("mic-devices");
   micList.style.display = micEnabled && micList.children.length > 0 ? "" : "none";
+  setGainRowVisible(micEnabled);
   await recorder.setAudioConfig(micEnabled, loopbackEnabled, selectedMicName);
 });
 
@@ -376,6 +401,13 @@ async function init() {
   document.getElementById("chk-mic").checked = micEnabled;        // true
   document.getElementById("chk-loopback").checked = loopbackEnabled; // false
   document.getElementById("chk-webcam").checked = webcamEnabled;  // false
+
+  // Gain micro — restaurer la valeur sauvegardée
+  const sliderPct = Math.round(micGain * 100);
+  document.getElementById("mic-gain-slider").value = String(sliderPct);
+  updateGainLabel(micGain);
+  setGainRowVisible(micEnabled);
+  await recorder.setMicGain(micGain);
 
   // Initialiser le sélecteur de position PiP
   updatePipCornerActive(pipPosition);

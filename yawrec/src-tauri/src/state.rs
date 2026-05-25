@@ -13,7 +13,7 @@
 // ============================================================
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -109,6 +109,9 @@ pub struct RecorderState {
     pub pip_buffer: Option<Arc<Mutex<Option<Frame>>>>,
     /// Position de l'incrustation (partagée avec le worker vidéo via AtomicU8).
     pub pip_position: Arc<AtomicU8>,
+    /// Gain linéaire appliqué aux samples micro avant mixage (f32 stocké en bits).
+    /// 1.0 = unité, 0.0 = muet, 2.0 = +6 dB. Modifiable en live.
+    pub mic_gain: Arc<AtomicU32>,
 
     pub video_worker:  Option<JoinHandle<()>>,
     pub audio_worker:  Option<JoinHandle<()>>,
@@ -139,6 +142,7 @@ impl Default for RecorderState {
             encoder_arc: None,
             pip_buffer: None,
             pip_position: Arc::new(AtomicU8::new(PipPosition::BottomRight.to_u8())),
+            mic_gain: Arc::new(AtomicU32::new(1.0f32.to_bits())),
             video_worker:  None,
             audio_worker:  None,
             webcam_worker: None,

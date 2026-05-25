@@ -11,7 +11,7 @@
 // ============================================================
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -132,9 +132,8 @@ fn composite_pip(screen: &mut [u8], screen_w: u32, screen_h: u32, pip: &Frame, p
         screen[dst_start..dst_end].copy_from_slice(&pip.data[src_start..src_end]);
     }
 
-    // Bordure blanche 2 px autour du PiP — petite touche visuelle qui
-    // sépare nettement la vignette du fond.
-    draw_pip_border(screen, screen_w, screen_h, pip.width, pip.height, pos);
+    // Pas de bordure — supprimée à la demande (D5-b).
+    // draw_pip_border() conservée ci-dessous pour usage futur (fond coloré, ombre, etc.).
 }
 
 fn draw_pip_border(
@@ -313,6 +312,7 @@ fn run_audio_worker(
     mic_enabled: bool,
     loopback_enabled: bool,
     mic_device_name: Option<String>,
+    mic_gain: Arc<AtomicU32>,
 ) {
     if !mic_enabled && !loopback_enabled {
         log::info!("Worker audio · désactivé (mic et loopback OFF)");
@@ -321,7 +321,7 @@ fn run_audio_worker(
 
     log::info!("Worker audio · démarrage (mic={mic_enabled}, loopback={loopback_enabled})");
 
-    let capturer = match AudioCapturer::open(mic_enabled, loopback_enabled, mic_device_name.as_deref()) {
+    let capturer = match AudioCapturer::open(mic_enabled, loopback_enabled, mic_device_name.as_deref(), mic_gain) {
         Ok(c) => c,
         Err(e) => { log::warn!("Audio désactivé : {e}"); return; }
     };
@@ -377,7 +377,7 @@ pub async fn do_start_recording(app: &AppHandle) -> YawrecResult<()> {
     let (stop_flag, audio_paused, paused_total_ms, byte_count, frame_count,
          screen_id, output_path, encoder_arc,
          pip_buffer, webcam_idx, pip_position,
-         mic_enabled, loopback_enabled, mic_device_name) = {
+         mic_enabled, loopback_enabled, mic_device_name, mic_gain) = {
         let mut s = state_mutex.lock().unwrap();
         if s.phase != RecordingPhase::Idle {
             return Err(YawrecError::InvalidState(
@@ -425,6 +425,7 @@ pub async fn do_start_recording(app: &AppHandle) -> YawrecResult<()> {
             s.mic_enabled,
             s.loopback_enabled,
             s.mic_device_name.clone(),
+            Arc::clone(&s.mic_gain),
         )
     };
 
@@ -467,7 +468,7 @@ pub async fn do_start_recording(app: &AppHandle) -> YawrecResult<()> {
         let pause = Arc::clone(&audio_paused);
         std::thread::Builder::new()
             .name("yawrec-audio-worker".into())
-            .spawn(move || run_audio_worker(stop, pause, enc_arc, mic_enabled, loopback_enabled, mic_device_name))
+            .spawn(move || run_audio_worker(stop, pause, enc_arc, mic_enabled, loopback_enabled, mic_device_name, mic_gain))
             .map_err(|e| YawrecError::Capture(format!("spawn audio : {e}")))?
     };
 
@@ -842,5 +843,17 @@ pub async fn set_pip_position(
     let s = state.lock().unwrap();
     s.pip_position.store(position.to_u8(), Ordering::Relaxed);
     log::debug!("set_pip_position → {:?}", position);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn set_mic_gain(
+    gain: f32,
+    state: State<'_, Mutex<RecorderState>>,
+) -> YawrecResult<()> {
+    let gain = gain.clamp(0.0, 4.0);
+    let s = state.lock().unwrap();
+    s.mic_gain.store(gain.to_bits(), Ordering::Relaxed);
+    log::debug!("set_mic_gain → {:.3} ({:.1} dB)", gain, 20.0 * gain.max(1e-6).log10());
     Ok(())
 }

@@ -143,6 +143,11 @@ export class Recorder {
     catch (err) { this._onError(err); }
   }
 
+  async setMicGain(gain) {
+    try { await invoke("set_mic_gain", { gain }); }
+    catch (err) { this._onError(err); }
+  }
+
   // ---------- Audio config ----------
   async setAudioConfig(micEnabled, loopbackEnabled, micDevice = null) {
     try {

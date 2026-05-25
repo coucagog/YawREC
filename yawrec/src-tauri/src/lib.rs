@@ -112,6 +112,7 @@ pub fn run() {
             commands::set_audio_config,
             commands::get_output_directory,
             commands::set_pip_position,
+            commands::set_mic_gain,
         ])
         .setup(move |app| {
             // ----------------------------------------------------
