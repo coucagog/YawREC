@@ -9,7 +9,7 @@ import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 
 export class Recorder {
-  constructor({ onPhaseChange, onTick, onError } = {}) {
+  constructor({ onPhaseChange, onTick, onError, onSaved } = {}) {
     this.phase = "idle"; // 'idle' | 'recording' | 'paused'
     this.mode  = "fullscreen";
     this.outputDir = null;
@@ -19,6 +19,7 @@ export class Recorder {
     this._onPhaseChange = onPhaseChange || (() => {});
     this._onTick        = onTick        || (() => {});
     this._onError       = onError       || (() => {});
+    this._onSaved       = onSaved       || (() => {});
   }
 
   async init() {
@@ -35,6 +36,7 @@ export class Recorder {
       console.log("[YawREC] enregistrement sauvegardé →", e.payload);
       this.phase = "idle";
       this._onPhaseChange(this.phase);
+      this._onSaved(e.payload);
     });
     this._unlistenError = await listen("recorder://error", (e) => {
       console.error("[YawREC] Erreur :", e.payload);
@@ -155,6 +157,11 @@ export class Recorder {
 
   async setMicGain(gain) {
     try { await invoke("set_mic_gain", { gain }); }
+    catch (err) { this._onError(err); }
+  }
+
+  async revealInExplorer(path) {
+    try { await invoke("reveal_in_explorer", { path }); }
     catch (err) { this._onError(err); }
   }
 

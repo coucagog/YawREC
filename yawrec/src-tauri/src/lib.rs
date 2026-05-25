@@ -115,6 +115,7 @@ pub fn run() {
             commands::set_mic_gain,
             commands::list_windows,
             commands::set_window_hwnd,
+            commands::reveal_in_explorer,
         ])
         .setup(move |app| {
             // ----------------------------------------------------

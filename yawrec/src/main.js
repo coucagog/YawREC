@@ -70,6 +70,7 @@ function parseElapsedSecs(elapsed) {
 
 // ---------- Logique d'enregistrement ----------
 const recorder = new Recorder({
+  onSaved: (filePath) => showSavedToast(filePath),
   onPhaseChange: (phase) => {
     const win = document.querySelector(".win-window");
     win.classList.toggle("recording", phase === "recording");
@@ -442,6 +443,44 @@ async function populateWindowPopover() {
     list.appendChild(el);
   });
 }
+
+// ============================================================
+// TOAST — enregistrement sauvegardé
+// ============================================================
+
+let _toastTimer = null;
+let _toastPath  = null;
+
+function showSavedToast(filePath) {
+  _toastPath = filePath;
+  const sep = filePath.includes("\\") ? "\\" : "/";
+  const filename = filePath.split(sep).pop();
+  document.getElementById("toast-filename").textContent = filename;
+
+  const toast = document.getElementById("toast-saved");
+  // Reset animation en retirant puis rajoutant la classe
+  toast.classList.remove("visible");
+  void toast.offsetWidth; // force reflow
+  toast.classList.add("visible");
+
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(dismissToast, 8000);
+}
+
+function dismissToast() {
+  const toast = document.getElementById("toast-saved");
+  toast.classList.remove("visible");
+  clearTimeout(_toastTimer);
+}
+
+document.getElementById("toast-open-btn").addEventListener("click", async () => {
+  if (_toastPath) await recorder.revealInExplorer(_toastPath);
+  dismissToast();
+});
+
+document.getElementById("toast-dismiss-btn").addEventListener("click", () => {
+  dismissToast();
+});
 
 // ============================================================
 // ARRÊT AUTOMATIQUE

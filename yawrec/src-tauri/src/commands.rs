@@ -1014,3 +1014,16 @@ pub async fn set_window_hwnd(
     log::debug!("set_window_hwnd → {:?}", s.selected_hwnd);
     Ok(())
 }
+
+// ============================================================
+// Ouvrir le fichier enregistré dans l'Explorateur Windows
+// ============================================================
+
+#[tauri::command]
+pub async fn reveal_in_explorer(path: String) -> YawrecResult<()> {
+    #[cfg(target_os = "windows")]
+    std::process::Command::new("explorer")
+        .arg(format!("/select,{}", path))
+        .spawn()?;
+    Ok(())
+}

@@ -239,6 +239,22 @@
       </div>
     </div>
 
+    <!-- ---------- Toast "Enregistrement sauvegardé" ---------- -->
+    <div id="toast-saved" aria-live="polite" aria-atomic="true">
+      <svg class="toast-icon" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+        <circle cx="10" cy="10" r="9" stroke="#4ade80" stroke-width="1.5"/>
+        <path d="M6 10l3 3 5-5" stroke="#4ade80" stroke-width="1.5"
+              stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <div class="toast-body">
+        <span class="toast-title">Enregistrement sauvegardé</span>
+        <span class="toast-filename" id="toast-filename"></span>
+      </div>
+      <button class="toast-btn" id="toast-open-btn">Ouvrir</button>
+      <button class="toast-dismiss" id="toast-dismiss-btn" aria-label="Fermer">✕</button>
+      <div class="toast-progress" id="toast-progress"></div>
+    </div>
+
     <!-- ---------- Pied de page ---------- -->
     <div class="win-footer">
       <span class="ft-item" id="autostop-item" title="Configurer l'arrêt automatique">
