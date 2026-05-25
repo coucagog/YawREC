@@ -12,6 +12,7 @@
 pub mod audio;
 pub mod screen;
 pub mod webcam;
+pub mod window;
 
 use std::time::Duration;
 

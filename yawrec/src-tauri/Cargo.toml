@@ -50,6 +50,7 @@ windows = { version = "0.61", features = [
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
     "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
 ] }
 # Webcam (D4) — MediaFoundation backend, déjà dispo sur Win 10/11.
 nokhwa = { version = "0.10", features = ["input-msmf"] }

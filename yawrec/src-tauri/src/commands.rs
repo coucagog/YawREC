@@ -21,7 +21,8 @@ use tauri_plugin_notification::NotificationExt;
 
 use crate::capture::audio::AudioCapturer;
 use crate::capture::webcam::PIP_MARGIN;
-use crate::capture::{audio, screen, webcam, Frame};
+use crate::capture::window::WindowInfo;
+use crate::capture::{audio, screen, webcam, window, Frame};
 use crate::encoder::{Encoder, EncoderConfig, VideoEncoder};
 use crate::error::{YawrecError, YawrecResult};
 use crate::state::{CaptureMode, PipPosition, RecorderState, RecordingPhase};
@@ -188,6 +189,49 @@ fn draw_pip_border(
 }
 
 // ============================================================
+// D6 — Crop de frame pour le mode Window
+// ============================================================
+
+/// Extrait un sous-rectangle (wx, wy, ww, wh) d'une frame plein écran BGRA8.
+/// Les pixels hors limites de la frame source restent noirs (zero-init).
+fn crop_frame_to_window(frame: &Frame, wx: i32, wy: i32, ww: u32, wh: u32) -> Frame {
+    let screen_w = frame.width as i32;
+    let screen_h = frame.height as i32;
+    let screen_stride = (frame.width * 4) as usize;
+    let dst_row_bytes = (ww * 4) as usize;
+    let mut data = vec![0u8; dst_row_bytes * wh as usize];
+
+    for row in 0..wh as i32 {
+        let screen_y = wy + row;
+        if screen_y < 0 || screen_y >= screen_h {
+            continue;
+        }
+
+        // Plage de colonnes visible dans la frame source
+        let col_start = (-wx).max(0) as u32;
+        let col_end = (screen_w - wx).min(ww as i32).max(0) as u32;
+        if col_start >= col_end {
+            continue;
+        }
+
+        let src_x = (wx + col_start as i32) as usize;
+        let src_off = screen_y as usize * screen_stride + src_x * 4;
+        let dst_off = row as usize * dst_row_bytes + col_start as usize * 4;
+        let n = (col_end - col_start) as usize * 4;
+
+        data[dst_off..dst_off + n].copy_from_slice(&frame.data[src_off..src_off + n]);
+    }
+
+    Frame {
+        width: ww,
+        height: wh,
+        stride: ww * 4,
+        data,
+        timestamp: frame.timestamp,
+    }
+}
+
+// ============================================================
 // Worker vidéo
 // ============================================================
 
@@ -202,6 +246,12 @@ struct VideoWorkerCtx {
     encoder_arc: Arc<Mutex<Option<Encoder>>>,
     pip_buffer: Option<Arc<Mutex<Option<Frame>>>>,
     pip_position: Arc<AtomicU8>,
+    /// D6 — mode Window : découpe la frame DXGI aux dimensions de la fenêtre.
+    capture_mode: CaptureMode,
+    selected_hwnd: Option<i64>,
+    /// Dimensions fixes de la zone de crop (déterminées au démarrage de l'enregistrement).
+    crop_w: u32,
+    crop_h: u32,
     app: AppHandle,
 }
 
@@ -209,9 +259,12 @@ fn run_video_worker(ctx: VideoWorkerCtx) {
     use crate::capture::Capturer;
 
     log::info!(
-        "Worker vidéo · démarrage (screen={}, pip={})",
+        "Worker vidéo · démarrage (screen={}, mode={:?}, pip={}, crop={}×{})",
         ctx.screen_id,
+        ctx.capture_mode,
         ctx.pip_buffer.is_some(),
+        ctx.crop_w,
+        ctx.crop_h,
     );
 
     let mut capturer = match screen::make_capturer(ctx.screen_id) {
@@ -234,6 +287,16 @@ fn run_video_worker(ctx: VideoWorkerCtx) {
                 // Drop frames while paused
                 if ctx.pause_flag.load(Ordering::Relaxed) {
                     continue;
+                }
+
+                // D6 — Window mode : recadrer la frame sur la fenêtre sélectionnée.
+                // On récupère la position courante à chaque frame pour suivre les déplacements.
+                if ctx.capture_mode == CaptureMode::Window && ctx.crop_w > 0 {
+                    if let Some(hwnd) = ctx.selected_hwnd {
+                        if let Some((wx, wy, _, _)) = window::get_window_rect(hwnd) {
+                            frame = crop_frame_to_window(&frame, wx, wy, ctx.crop_w, ctx.crop_h);
+                        }
+                    }
                 }
 
                 // D5 — composite PiP avant encodage
@@ -379,6 +442,7 @@ pub async fn do_start_recording(app: &AppHandle) -> YawrecResult<()> {
          screen_id, output_path, encoder_arc,
          pip_buffer, webcam_idx, pip_position,
          mic_enabled, loopback_enabled, mic_device_name, mic_gain, mic_level,
+         capture_mode, selected_hwnd, crop_w, crop_h,
          mic_monitor_handle_opt) = {
         let mut s = state_mutex.lock().unwrap();
         if s.phase != RecordingPhase::Idle {
@@ -412,6 +476,16 @@ pub async fn do_start_recording(app: &AppHandle) -> YawrecResult<()> {
             (None, 0)
         };
 
+        // D6 — Window mode : dimensions de crop fixées au démarrage.
+        let (crop_w, crop_h) = if s.mode == CaptureMode::Window {
+            match s.selected_hwnd.and_then(|h| window::get_window_rect(h)) {
+                Some((_, _, w, h)) => (w & !1, h & !1), // arrondir à pair pour H.264
+                None => (0, 0),
+            }
+        } else {
+            (0, 0)
+        };
+
         (
             Arc::clone(&s.stop_flag),
             Arc::clone(&s.audio_paused),
@@ -429,6 +503,10 @@ pub async fn do_start_recording(app: &AppHandle) -> YawrecResult<()> {
             s.mic_device_name.clone(),
             Arc::clone(&s.mic_gain),
             Arc::clone(&s.mic_level),
+            s.mode,
+            s.selected_hwnd,
+            crop_w,
+            crop_h,
             // Arrêt du monitor VU : le worker audio prend le relais
             { s.mic_monitor_stop.store(true, Ordering::Relaxed); s.mic_monitor_handle.take() },
         )
@@ -451,6 +529,10 @@ pub async fn do_start_recording(app: &AppHandle) -> YawrecResult<()> {
             encoder_arc: Arc::clone(&encoder_arc),
             pip_buffer: pip_buffer.as_ref().map(Arc::clone),
             pip_position: Arc::clone(&pip_position),
+            capture_mode,
+            selected_hwnd,
+            crop_w,
+            crop_h,
             app: app.clone(),
         };
         std::thread::Builder::new()
@@ -461,7 +543,7 @@ pub async fn do_start_recording(app: &AppHandle) -> YawrecResult<()> {
 
     #[cfg(not(target_os = "windows"))]
     let video_handle = {
-        let _ = (screen_id, output_path, byte_count, frame_count, &encoder_arc, &stop_flag, &pip_buffer);
+        let _ = (screen_id, output_path, byte_count, frame_count, &encoder_arc, &stop_flag, &pip_buffer, capture_mode, selected_hwnd, crop_w, crop_h);
         log::warn!("Capture écran non implémentée sur cette plateforme — worker vidéo no-op");
         std::thread::Builder::new()
             .name("yawrec-video-worker-noop".into())
@@ -910,5 +992,25 @@ pub async fn set_mic_gain(
     let s = state.lock().unwrap();
     s.mic_gain.store(gain.to_bits(), Ordering::Relaxed);
     log::debug!("set_mic_gain → {:.3} ({:.1} dB)", gain, 20.0 * gain.max(1e-6).log10());
+    Ok(())
+}
+
+// ============================================================
+// D6 — Capture fenêtre
+// ============================================================
+
+#[tauri::command]
+pub async fn list_windows() -> YawrecResult<Vec<WindowInfo>> {
+    Ok(window::list_windows())
+}
+
+#[tauri::command]
+pub async fn set_window_hwnd(
+    hwnd: i64,
+    state: State<'_, Mutex<RecorderState>>,
+) -> YawrecResult<()> {
+    let mut s = state.lock().unwrap();
+    s.selected_hwnd = if hwnd == 0 { None } else { Some(hwnd) };
+    log::debug!("set_window_hwnd → {:?}", s.selected_hwnd);
     Ok(())
 }

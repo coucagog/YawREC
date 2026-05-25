@@ -121,6 +121,16 @@ export class Recorder {
     catch (err) { this._onError(err); return []; }
   }
 
+  async listWindows() {
+    try { return await invoke("list_windows"); }
+    catch (err) { this._onError(err); return []; }
+  }
+
+  async setWindowHwnd(hwnd) {
+    try { await invoke("set_window_hwnd", { hwnd }); }
+    catch (err) { this._onError(err); }
+  }
+
   async setScreen(id) {
     try { await invoke("set_screen_id", { id }); }
     catch (err) { this._onError(err); }

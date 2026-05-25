@@ -79,6 +79,8 @@ pub struct RecorderState {
     pub mode: CaptureMode,
     pub output_dir: Option<PathBuf>,
     pub screen_id: Option<u32>,
+    /// HWND de la fenêtre sélectionnée pour le mode Window (i64 = isize cross-plateforme).
+    pub selected_hwnd: Option<i64>,
 
     /// Audio
     pub mic_enabled: bool,
@@ -134,6 +136,7 @@ impl Default for RecorderState {
             mode: CaptureMode::default(),
             output_dir: None,
             screen_id: None,
+            selected_hwnd: None,
             mic_enabled: true,
             loopback_enabled: false,
             mic_device_name: None,

@@ -113,6 +113,8 @@ pub fn run() {
             commands::get_output_directory,
             commands::set_pip_position,
             commands::set_mic_gain,
+            commands::list_windows,
+            commands::set_window_hwnd,
         ])
         .setup(move |app| {
             // ----------------------------------------------------

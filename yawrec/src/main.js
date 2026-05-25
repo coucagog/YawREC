@@ -336,6 +336,8 @@ document.querySelectorAll(".pip-corner").forEach((btn) => {
 
 let selectedScreenId = null;
 
+let selectedHwnd = null;
+
 // Mode de capture (segmented control)
 document.querySelectorAll("#mode-seg button[data-mode]").forEach((btn) => {
   btn.addEventListener("click", async () => {
@@ -347,6 +349,9 @@ document.querySelectorAll("#mode-seg button[data-mode]").forEach((btn) => {
     if (btn.dataset.mode === "fullscreen") {
       await populateScreenPopover();
       openPopover("popover-screen");
+    } else if (btn.dataset.mode === "window") {
+      await populateWindowPopover();
+      openPopover("popover-window");
     }
   });
 });
@@ -374,6 +379,38 @@ async function populateScreenPopover() {
       list.querySelectorAll(".pop-device").forEach((x) => x.classList.remove("selected"));
       el.classList.add("selected");
       await recorder.setScreen(s.id);
+      closeAllPopovers();
+    });
+    list.appendChild(el);
+  });
+}
+
+async function populateWindowPopover() {
+  const windows = await recorder.listWindows();
+  const list = document.getElementById("window-devices");
+  list.innerHTML = "";
+
+  if (windows.length === 0) {
+    const el = document.createElement("div");
+    el.className = "pop-device";
+    el.style.fontStyle = "italic";
+    el.style.pointerEvents = "none";
+    el.textContent = "Aucune fenêtre détectée";
+    list.appendChild(el);
+    return;
+  }
+
+  windows.forEach((w) => {
+    const el = document.createElement("div");
+    el.className = "pop-device" + (selectedHwnd === w.hwnd ? " selected" : "");
+    el.textContent = `${w.name}  (${w.width}×${w.height})`;
+    el.title = w.name;
+    el.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      selectedHwnd = w.hwnd;
+      list.querySelectorAll(".pop-device").forEach((x) => x.classList.remove("selected"));
+      el.classList.add("selected");
+      await recorder.setWindowHwnd(w.hwnd);
       closeAllPopovers();
     });
     list.appendChild(el);
@@ -414,9 +451,9 @@ async function init() {
     document.getElementById("encoder-pill").title = info.codec;
   }
 
-  // Griser les boutons non implémentés (fenêtre, région)
+  // Griser les boutons non implémentés (région seulement)
   document.querySelectorAll(
-    '#mode-seg button[data-mode="window"], #mode-seg button[data-mode="region"]'
+    '#mode-seg button[data-mode="region"]'
   ).forEach((btn) => {
     btn.classList.add("unimplemented");
     btn.title = "Non disponible dans cette version";
