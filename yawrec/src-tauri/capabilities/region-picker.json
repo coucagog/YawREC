@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "region-picker",
+  "description": "Permissions pour la fenêtre de sélection de région",
+  "windows": ["region-picker"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-close"
+  ]
+}
