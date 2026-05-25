@@ -18,8 +18,9 @@
 // ============================================================
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 use std::time::Duration;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -88,7 +89,8 @@ pub struct AudioCapturer {
     loopback_buffer: Arc<Mutex<VecDeque<f32>>>,
     has_mic: bool,
     has_loopback: bool,
-    mic_gain: Arc<AtomicU32>,
+    mic_gain:  Arc<AtomicU32>,
+    mic_level: Arc<AtomicU32>, // VU partagé avec RecorderState
 }
 
 impl AudioCapturer {
@@ -102,7 +104,8 @@ impl AudioCapturer {
         mic_enabled: bool,
         loopback_enabled: bool,
         mic_device_name: Option<&str>,
-        mic_gain: Arc<AtomicU32>,
+        mic_gain:  Arc<AtomicU32>,
+        mic_level: Arc<AtomicU32>,
     ) -> Result<Self, AudioError> {
         let host = cpal::default_host();
 
@@ -187,6 +190,7 @@ impl AudioCapturer {
             has_mic,
             has_loopback,
             mic_gain,
+            mic_level,
         })
     }
 
@@ -222,6 +226,14 @@ impl AudioCapturer {
             if (gain - 1.0).abs() > f32::EPSILON {
                 for s in m.iter_mut() { *s = (*s * gain).clamp(-1.0, 1.0); }
             }
+        }
+
+        // VU-mètre : RMS du signal micro après gain, avec ballistics (attaque immédiate, déclin lent).
+        if let Some(ref m) = mic_chunk {
+            let rms = (m.iter().map(|&s| s * s).sum::<f32>() / m.len() as f32).sqrt();
+            let prev = f32::from_bits(self.mic_level.load(Ordering::Relaxed));
+            let next = if rms >= prev { rms } else { (prev * 0.96).max(0.0) };
+            self.mic_level.store(next.to_bits(), Ordering::Relaxed);
         }
 
         if mic_chunk.is_none() && loop_chunk.is_none() {
@@ -435,4 +447,126 @@ fn convert_to_48k_stereo(input: &[f32], sample_rate: u32, channels: u16) -> Vec<
         }
     }
     out
+}
+
+// ============================================================
+// AudioMonitor — niveau micro toujours actif (pré-enregistrement)
+// ============================================================
+
+/// Lance un thread léger qui ouvre le micro, calcule le RMS et
+/// l'écrit dans `level` (f32 bits). Tourne jusqu'à ce que `stop` soit true.
+///
+/// Important : `cpal::Stream` n'est pas `Send` sur WASAPI, donc le stream
+/// est créé ET détenu sur le thread monitor lui-même. On utilise un canal
+/// sync pour renvoyer succès/erreur à l'appelant.
+pub fn start_monitor(
+    mic_device_name: Option<&str>,
+    level: Arc<AtomicU32>,
+    gain:  Arc<AtomicU32>,
+    stop:  Arc<AtomicBool>,
+) -> Result<JoinHandle<()>, AudioError> {
+    let device_name_owned = mic_device_name.map(|s| s.to_string());
+    let (tx, rx) = std::sync::mpsc::sync_channel::<Result<(), AudioError>>(1);
+
+    let handle = std::thread::Builder::new()
+        .name("yawrec-mic-monitor".into())
+        .spawn(move || {
+            // Ouverture du device + stream SUR CE thread (Stream n'est pas Send sur WASAPI).
+            let host = cpal::default_host();
+            let device = if let Some(ref name) = device_name_owned {
+                host.input_devices()
+                    .ok()
+                    .and_then(|mut devs| devs.find(|d| d.name().ok().as_deref() == Some(name.as_str())))
+                    .or_else(|| host.default_input_device())
+            } else {
+                host.default_input_device()
+            };
+
+            let device = match device {
+                Some(d) => d,
+                None => {
+                    let _ = tx.send(Err(AudioError::NotFound("Aucun micro (monitor VU)".into())));
+                    return;
+                }
+            };
+            let dev_name = device.name().unwrap_or_else(|_| "?".into());
+
+            let supported = match device.default_input_config() {
+                Ok(c)  => c,
+                Err(e) => { let _ = tx.send(Err(AudioError::Format(format!("monitor cfg : {e}")))); return; }
+            };
+            let fmt      = supported.sample_format();
+            let cfg: cpal::StreamConfig = supported.into();
+            let channels = cfg.channels as usize;
+
+            macro_rules! build_mon {
+                ($ty:ty) => {{
+                    let lv = Arc::clone(&level);
+                    let gn = Arc::clone(&gain);
+                    device.build_input_stream(
+                        &cfg,
+                        move |data: &[$ty], _| {
+                            if data.is_empty() { return; }
+                            let step  = channels.max(1);
+                            let count = data.len() / step;
+                            if count == 0 { return; }
+                            // RMS du canal gauche — reflète le micro principal.
+                            let sum_sq: f32 = (0..count)
+                                .map(|i| { let s = sample_to_f32(data[i * step]); s * s })
+                                .sum();
+                            let rms    = (sum_sq / count as f32).sqrt();
+                            let g      = f32::from_bits(gn.load(Ordering::Relaxed));
+                            let gained = (rms * g).min(1.0);
+                            // Ballistics : attaque instantanée, déclin lent.
+                            let prev = f32::from_bits(lv.load(Ordering::Relaxed));
+                            let next = if gained >= prev { gained } else { (prev * 0.96).max(0.0) };
+                            lv.store(next.to_bits(), Ordering::Relaxed);
+                        },
+                        |e| log::warn!("AudioMonitor stream : {e}"),
+                        Some(Duration::from_millis(50)),
+                    )
+                }};
+            }
+
+            let stream_res = match fmt {
+                cpal::SampleFormat::F32 => build_mon!(f32),
+                cpal::SampleFormat::I16 => build_mon!(i16),
+                cpal::SampleFormat::U16 => build_mon!(u16),
+                cpal::SampleFormat::I32 => build_mon!(i32),
+                cpal::SampleFormat::I8  => build_mon!(i8),
+                cpal::SampleFormat::U8  => build_mon!(u8),
+                other => {
+                    let _ = tx.send(Err(AudioError::Format(format!("monitor format : {other:?}"))));
+                    return;
+                }
+            };
+
+            let stream = match stream_res {
+                Ok(s)  => s,
+                Err(e) => { let _ = tx.send(Err(AudioError::Stream(format!("monitor build : {e}")))); return; }
+            };
+
+            if let Err(e) = stream.play() {
+                let _ = tx.send(Err(AudioError::Stream(format!("monitor play : {e}"))));
+                return;
+            }
+
+            log::info!("AudioMonitor · démarré sur {dev_name}");
+            let _ = tx.send(Ok(()));
+
+            // Garde le stream vivant jusqu'à l'arrêt (le stop flag est posé par commands.rs).
+            while !stop.load(Ordering::Relaxed) {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            drop(stream);
+            log::info!("AudioMonitor · arrêté");
+        })
+        .map_err(|e| AudioError::Stream(format!("spawn monitor : {e}")))?;
+
+    // Attendre la confirmation de démarrage (timeout 1 s pour éviter un blocage infini).
+    match rx.recv_timeout(Duration::from_secs(1)) {
+        Ok(Ok(()))  => Ok(handle),
+        Ok(Err(e))  => { let _ = handle.join(); Err(e) }
+        Err(_)      => Err(AudioError::Stream("AudioMonitor : timeout au démarrage".into())),
+    }
 }

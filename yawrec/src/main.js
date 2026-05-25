@@ -5,9 +5,46 @@
 // ============================================================
 
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { listen } from "@tauri-apps/api/event";
 import { Recorder } from "./recorder.js";
 
 const appWindow = getCurrentWindow();
+
+// ============================================================
+// VU-MÈTRE — animation rAF pilotée par recorder://vu (100 ms)
+// ============================================================
+
+let _vuTarget  = 0.0; // niveau reçu de Rust
+let _vuCurrent = 0.0; // niveau affiché (lissé)
+
+listen("recorder://vu", (e) => {
+  _vuTarget = typeof e.payload === "number" ? e.payload : 0;
+});
+
+(function vuLoop() {
+  // Ballistics JS : attaque rapide (~50 ms), déclin lent (~600 ms à 60 fps)
+  const alpha = _vuTarget > _vuCurrent ? 0.45 : 0.055;
+  _vuCurrent += (_vuTarget - _vuCurrent) * alpha;
+
+  const lv = _vuCurrent;
+
+  // 3 segments : b1 (bas/vert), b2 (milieu/jaune à partir de 55%), b3 (haut/rouge à partir de 80%)
+  const s1 = Math.min(lv / 0.45, 1.0);
+  const s2 = Math.max(0, Math.min((lv - 0.30) / 0.45, 1.0));
+  const s3 = Math.max(0, Math.min((lv - 0.65) / 0.35, 1.0));
+
+  const bars = document.querySelectorAll(".vu .bar");
+  if (bars.length === 3) {
+    bars[0].style.transform = `scaleY(${Math.max(s1, 0.04).toFixed(3)})`;
+    bars[1].style.transform = `scaleY(${Math.max(s2, 0.04).toFixed(3)})`;
+    bars[2].style.transform = `scaleY(${Math.max(s3, 0.04).toFixed(3)})`;
+    // Couleurs zonées
+    bars[1].style.background = s2 > 0.01 ? "#fbbf24" : "";       // jaune
+    bars[2].style.background = s3 > 0.01 ? "var(--rec-500)" : ""; // rouge
+  }
+
+  requestAnimationFrame(vuLoop);
+})();
 
 // ---------- Boutons système (titlebar custom) ----------
 document.getElementById("btn-minimize").addEventListener("click", () => {

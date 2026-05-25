@@ -170,6 +170,23 @@ pub fn run() {
                 }
             });
 
+            // ----------------------------------------------------
+            // VU-mètre : émet le niveau micro à 100 ms (toujours actif)
+            // ----------------------------------------------------
+            let app_vu = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let mut interval = tokio::time::interval(Duration::from_millis(100));
+                loop {
+                    interval.tick().await;
+                    let level = {
+                        let state_mutex = app_vu.state::<Mutex<RecorderState>>();
+                        let s = state_mutex.lock().unwrap();
+                        f32::from_bits(s.mic_level.load(std::sync::atomic::Ordering::Relaxed))
+                    };
+                    let _ = app_vu.emit("recorder://vu", level);
+                }
+            });
+
             log::info!("YawREC · fenêtre prête");
             Ok(())
         })

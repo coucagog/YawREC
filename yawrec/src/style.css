@@ -218,7 +218,7 @@ html, body {
 
 .caret { width: 10px; height: 10px; color: #aaa; margin-left: 2px; }
 
-/* VU-mètre */
+/* VU-mètre — piloté par JS (rAF) depuis recorder://vu */
 .vu {
   display: inline-flex;
   align-items: flex-end;
@@ -227,22 +227,17 @@ html, body {
   margin-left: 4px;
 }
 .vu .bar {
-  width: 2px;
-  background: var(--ok-500);
+  width: 3px;
   border-radius: 1px;
   transform-origin: bottom center;
-  box-shadow: 0 0 4px rgba(74, 222, 128, 0.45);
-  /* Animations désactivées par défaut, activées quand recording */
+  transform: scaleY(0.04);
+  background: var(--ok-500);
+  box-shadow: 0 0 3px rgba(74, 222, 128, 0.3);
 }
-.vu .b1 { height: 4px; }
-.vu .b2 { height: 8px; }
-.vu .b3 { height: 12px; }
-.win-window.recording .vu .b1 { animation: vu1 0.55s ease-in-out infinite alternate; }
-.win-window.recording .vu .b2 { animation: vu2 0.45s ease-in-out infinite alternate; }
-.win-window.recording .vu .b3 { animation: vu3 0.50s ease-in-out infinite alternate; }
-@keyframes vu1 { from { transform: scaleY(0.35); } to { transform: scaleY(1); } }
-@keyframes vu2 { from { transform: scaleY(1);    } to { transform: scaleY(0.45); } }
-@keyframes vu3 { from { transform: scaleY(0.55); } to { transform: scaleY(0.95); } }
+/* Hauteurs max des 3 segments (scaleY drive la hauteur effective) */
+.vu .b1 { height: 5px; }
+.vu .b2 { height: 9px; }
+.vu .b3 { height: 13px; }
 
 /* Webcam (objectif stylisé) */
 .cam-icon {

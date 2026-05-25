@@ -312,7 +312,8 @@ fn run_audio_worker(
     mic_enabled: bool,
     loopback_enabled: bool,
     mic_device_name: Option<String>,
-    mic_gain: Arc<AtomicU32>,
+    mic_gain:  Arc<AtomicU32>,
+    mic_level: Arc<AtomicU32>,
 ) {
     if !mic_enabled && !loopback_enabled {
         log::info!("Worker audio · désactivé (mic et loopback OFF)");
@@ -321,7 +322,7 @@ fn run_audio_worker(
 
     log::info!("Worker audio · démarrage (mic={mic_enabled}, loopback={loopback_enabled})");
 
-    let capturer = match AudioCapturer::open(mic_enabled, loopback_enabled, mic_device_name.as_deref(), mic_gain) {
+    let capturer = match AudioCapturer::open(mic_enabled, loopback_enabled, mic_device_name.as_deref(), mic_gain, mic_level) {
         Ok(c) => c,
         Err(e) => { log::warn!("Audio désactivé : {e}"); return; }
     };
@@ -377,7 +378,8 @@ pub async fn do_start_recording(app: &AppHandle) -> YawrecResult<()> {
     let (stop_flag, audio_paused, paused_total_ms, byte_count, frame_count,
          screen_id, output_path, encoder_arc,
          pip_buffer, webcam_idx, pip_position,
-         mic_enabled, loopback_enabled, mic_device_name, mic_gain) = {
+         mic_enabled, loopback_enabled, mic_device_name, mic_gain, mic_level,
+         mic_monitor_handle_opt) = {
         let mut s = state_mutex.lock().unwrap();
         if s.phase != RecordingPhase::Idle {
             return Err(YawrecError::InvalidState(
@@ -426,8 +428,14 @@ pub async fn do_start_recording(app: &AppHandle) -> YawrecResult<()> {
             s.loopback_enabled,
             s.mic_device_name.clone(),
             Arc::clone(&s.mic_gain),
+            Arc::clone(&s.mic_level),
+            // Arrêt du monitor VU : le worker audio prend le relais
+            { s.mic_monitor_stop.store(true, Ordering::Relaxed); s.mic_monitor_handle.take() },
         )
     };
+
+    // Laisser le thread monitor s'arrêter naturellement (il vérifie le flag toutes les 100 ms).
+    drop(mic_monitor_handle_opt);
 
     // ---- Worker vidéo ----
     #[cfg(target_os = "windows")]
@@ -468,7 +476,7 @@ pub async fn do_start_recording(app: &AppHandle) -> YawrecResult<()> {
         let pause = Arc::clone(&audio_paused);
         std::thread::Builder::new()
             .name("yawrec-audio-worker".into())
-            .spawn(move || run_audio_worker(stop, pause, enc_arc, mic_enabled, loopback_enabled, mic_device_name, mic_gain))
+            .spawn(move || run_audio_worker(stop, pause, enc_arc, mic_enabled, loopback_enabled, mic_device_name, mic_gain, mic_level))
             .map_err(|e| YawrecError::Capture(format!("spawn audio : {e}")))?
     };
 
@@ -575,6 +583,23 @@ pub async fn do_stop_recording(app: &AppHandle) -> YawrecResult<String> {
         "YawREC · enregistrement terminé",
         &format!("Fichier : {final_path}"),
     );
+
+    // Redémarrer le monitor VU maintenant que le worker audio est arrêté.
+    let (mic_enabled, mic_device, mic_level, mic_gain) = {
+        let s = state_mutex.lock().unwrap();
+        s.mic_level.store(0f32.to_bits(), Ordering::Relaxed);
+        (s.mic_enabled, s.mic_device_name.clone(), Arc::clone(&s.mic_level), Arc::clone(&s.mic_gain))
+    };
+    if mic_enabled {
+        let new_stop = Arc::new(AtomicBool::new(false));
+        if let Ok(handle) = audio::start_monitor(
+            mic_device.as_deref(), mic_level, mic_gain, Arc::clone(&new_stop),
+        ) {
+            let mut s = state_mutex.lock().unwrap();
+            s.mic_monitor_stop = new_stop;
+            s.mic_monitor_handle = Some(handle);
+        }
+    }
 
     Ok(final_path)
 }
@@ -816,14 +841,44 @@ pub async fn set_audio_config(
     mic_device: Option<String>,
     state: State<'_, Mutex<RecorderState>>,
 ) -> YawrecResult<()> {
-    let mut s = state.lock().unwrap();
-    s.mic_enabled = mic_enabled;
-    s.loopback_enabled = loopback_enabled;
-    s.mic_device_name = mic_device;
+    // Mettre à jour l'état + arrêter l'ancien monitor en une seule prise de lock.
+    let (phase, device_name, mic_level, mic_gain, new_stop) = {
+        let mut s = state.lock().unwrap();
+        s.mic_enabled     = mic_enabled;
+        s.loopback_enabled = loopback_enabled;
+        s.mic_device_name  = mic_device;
+        // Signal + drop de l'ancien monitor
+        s.mic_monitor_stop.store(true, Ordering::Relaxed);
+        let _ = s.mic_monitor_handle.take();
+        if !mic_enabled {
+            s.mic_level.store(0f32.to_bits(), Ordering::Relaxed);
+        }
+        let new_stop = Arc::new(AtomicBool::new(false));
+        let result = (
+            s.phase,
+            s.mic_device_name.clone(),
+            Arc::clone(&s.mic_level),
+            Arc::clone(&s.mic_gain),
+            Arc::clone(&new_stop),
+        );
+        s.mic_monitor_stop = new_stop;
+        result
+    };
+
     log::debug!(
-        "set_audio_config → mic={} loop={} device={:?}",
-        mic_enabled, loopback_enabled, s.mic_device_name
+        "set_audio_config → mic={mic_enabled} loop={loopback_enabled} device={device_name:?}"
     );
+
+    // Démarrer le nouveau monitor seulement si mic actif ET pas d'enregistrement en cours
+    // (pendant l'enregistrement, le worker audio gère le niveau).
+    if mic_enabled && phase == RecordingPhase::Idle {
+        if let Ok(handle) = audio::start_monitor(
+            device_name.as_deref(), mic_level, mic_gain, Arc::clone(&new_stop),
+        ) {
+            state.lock().unwrap().mic_monitor_handle = Some(handle);
+        }
+    }
+
     Ok(())
 }
 

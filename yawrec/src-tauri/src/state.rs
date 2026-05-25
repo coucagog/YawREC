@@ -112,6 +112,13 @@ pub struct RecorderState {
     /// Gain linéaire appliqué aux samples micro avant mixage (f32 stocké en bits).
     /// 1.0 = unité, 0.0 = muet, 2.0 = +6 dB. Modifiable en live.
     pub mic_gain: Arc<AtomicU32>,
+    /// Niveau RMS du micro (f32 bits, 0.0–1.0). Mis à jour par l'AudioMonitor
+    /// (repos) ou le worker audio (enregistrement). Lu par la boucle tick → VU.
+    pub mic_level: Arc<AtomicU32>,
+    /// Flag d'arrêt du thread AudioMonitor courant.
+    pub mic_monitor_stop: Arc<AtomicBool>,
+    /// Handle du thread AudioMonitor. None quand l'enregistrement est actif.
+    pub mic_monitor_handle: Option<JoinHandle<()>>,
 
     pub video_worker:  Option<JoinHandle<()>>,
     pub audio_worker:  Option<JoinHandle<()>>,
@@ -142,7 +149,10 @@ impl Default for RecorderState {
             encoder_arc: None,
             pip_buffer: None,
             pip_position: Arc::new(AtomicU8::new(PipPosition::BottomRight.to_u8())),
-            mic_gain: Arc::new(AtomicU32::new(1.0f32.to_bits())),
+            mic_gain:  Arc::new(AtomicU32::new(1.0f32.to_bits())),
+            mic_level: Arc::new(AtomicU32::new(0f32.to_bits())),
+            mic_monitor_stop:   Arc::new(AtomicBool::new(false)),
+            mic_monitor_handle: None,
             video_worker:  None,
             audio_worker:  None,
             webcam_worker: None,
