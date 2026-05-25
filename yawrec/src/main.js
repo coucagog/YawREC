@@ -57,6 +57,17 @@ document.getElementById("btn-close").addEventListener("click", async () => {
   await appWindow.close();
 });
 
+// ---------- Arrêt automatique ----------
+const _savedAutoStop = parseInt(localStorage.getItem("yawrec_autostop"), 10);
+let autoStopSecs = isFinite(_savedAutoStop) && _savedAutoStop >= 0 ? _savedAutoStop : 0;
+
+function parseElapsedSecs(elapsed) {
+  const parts = elapsed.split(":").map(Number);
+  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  if (parts.length === 2) return parts[0] * 60 + parts[1];
+  return 0;
+}
+
 // ---------- Logique d'enregistrement ----------
 const recorder = new Recorder({
   onPhaseChange: (phase) => {
@@ -74,6 +85,9 @@ const recorder = new Recorder({
     const fcItem = document.getElementById("frame-count-item");
     fcItem.style.display = (phase === "recording" || phase === "paused") ? "" : "none";
 
+    // Reset autostop label quand on revient à idle
+    if (phase === "idle") refreshAutoStopLabel();
+
     // Hint pause dans le footer
     const pauseHint = document.getElementById("pause-hint");
     if (pauseHint) {
@@ -89,6 +103,16 @@ const recorder = new Recorder({
     document.getElementById("size-text").textContent = sizeHuman;
     if (frameCount !== undefined) {
       document.getElementById("frame-count-text").textContent = `${frameCount} frames`;
+    }
+    // Auto-stop countdown (uniquement pendant l'enregistrement, pas la pause)
+    if (autoStopSecs > 0 && recorder.phase === "recording") {
+      const elapsedS = parseElapsedSecs(elapsed);
+      const remaining = autoStopSecs - elapsedS;
+      if (remaining <= 0) {
+        recorder.stop();
+      } else if (remaining <= 60) {
+        document.getElementById("autostop-label").textContent = `Arrêt dans ${remaining}s`;
+      }
     }
   },
   onError: (err) => {
@@ -137,6 +161,8 @@ function closeAllPopovers() {
     el.classList.remove("visible");
     el.setAttribute("aria-hidden", "true");
   });
+  const asp = document.getElementById("popover-autostop");
+  if (asp) { asp.classList.remove("visible"); asp.setAttribute("aria-hidden", "true"); }
   currentPopover = null;
 }
 
@@ -418,6 +444,95 @@ async function populateWindowPopover() {
 }
 
 // ============================================================
+// ARRÊT AUTOMATIQUE
+// ============================================================
+
+function refreshAutoStopLabel() {
+  const label = document.getElementById("autostop-label");
+  const item  = document.getElementById("autostop-item");
+  if (autoStopSecs > 0) {
+    const h = Math.floor(autoStopSecs / 3600);
+    const m = Math.floor((autoStopSecs % 3600) / 60);
+    label.textContent = h > 0 ? `${h}h${m > 0 ? m + "min" : ""}` : `${m} min`;
+    item.classList.add("autostop-active");
+  } else {
+    label.textContent = "Arrêt automatique";
+    item.classList.remove("autostop-active");
+  }
+}
+
+function updateAutoStopPresetActive() {
+  document.querySelectorAll(".as-preset").forEach((btn) => {
+    btn.classList.toggle("active", parseInt(btn.dataset.secs, 10) === autoStopSecs);
+  });
+}
+
+function setAutoStop(secs) {
+  autoStopSecs = secs;
+  localStorage.setItem("yawrec_autostop", String(secs));
+  refreshAutoStopLabel();
+  updateAutoStopPresetActive();
+}
+
+// Footer item → ouvrir/fermer le popover autostop
+document.getElementById("autostop-item").addEventListener("click", (e) => {
+  e.stopPropagation();
+  const pop = document.getElementById("popover-autostop");
+  if (pop.classList.contains("visible")) {
+    pop.classList.remove("visible");
+    pop.setAttribute("aria-hidden", "true");
+  } else {
+    closeAllPopovers();
+    updateAutoStopPresetActive();
+    pop.classList.add("visible");
+    pop.setAttribute("aria-hidden", "false");
+  }
+});
+
+// Bouton ✕ dans le popover
+document.getElementById("autostop-close-btn").addEventListener("click", (e) => {
+  e.stopPropagation();
+  const pop = document.getElementById("popover-autostop");
+  pop.classList.remove("visible");
+  pop.setAttribute("aria-hidden", "true");
+});
+
+// Clic en dehors → fermer (sur le document, pour capturer hors .win-body)
+document.addEventListener("mousedown", (e) => {
+  const pop  = document.getElementById("popover-autostop");
+  const item = document.getElementById("autostop-item");
+  if (!pop.classList.contains("visible")) return;
+  if (!pop.contains(e.target) && !item.contains(e.target)) {
+    pop.classList.remove("visible");
+    pop.setAttribute("aria-hidden", "true");
+  }
+});
+
+// Boutons presets
+document.querySelectorAll(".as-preset").forEach((btn) => {
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    setAutoStop(parseInt(btn.dataset.secs, 10));
+  });
+});
+
+// Input personnalisé — Enter ou blur
+const _asInput = document.getElementById("autostop-custom-min");
+_asInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    const mins = parseInt(e.target.value, 10);
+    if (isFinite(mins) && mins >= 1) setAutoStop(mins * 60);
+    e.target.value = "";
+    e.target.blur();
+  }
+});
+_asInput.addEventListener("blur", (e) => {
+  const mins = parseInt(e.target.value, 10);
+  if (isFinite(mins) && mins >= 1) setAutoStop(mins * 60);
+  e.target.value = "";
+});
+
+// ============================================================
 // DOSSIER DE SORTIE
 // ============================================================
 
@@ -501,6 +616,10 @@ async function init() {
       </span>`
     );
   }
+
+  // Restaurer l'état d'arrêt automatique
+  refreshAutoStopLabel();
+  updateAutoStopPresetActive();
 }
 
 init();

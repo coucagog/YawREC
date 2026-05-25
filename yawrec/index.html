@@ -219,16 +219,36 @@
 
     </div>
 
+    <!-- ---------- Arrêt automatique (popover flottant hors .win-body) ---------- -->
+    <div id="popover-autostop" aria-hidden="true">
+      <div class="pop-header">
+        <span>Arrêt automatique</span>
+        <button class="pop-close" id="autostop-close-btn" aria-label="Fermer">✕</button>
+      </div>
+      <div class="as-presets">
+        <button class="as-preset" data-secs="0">Off</button>
+        <button class="as-preset" data-secs="300">5 min</button>
+        <button class="as-preset" data-secs="900">15 min</button>
+        <button class="as-preset" data-secs="1800">30 min</button>
+        <button class="as-preset" data-secs="3600">1 h</button>
+      </div>
+      <div class="as-custom-row">
+        <span class="pop-label">Personnalisé</span>
+        <input type="number" id="autostop-custom-min" min="1" max="999" placeholder="min">
+        <span class="pop-label">min</span>
+      </div>
+    </div>
+
     <!-- ---------- Pied de page ---------- -->
     <div class="win-footer">
-      <span class="ft-item">
+      <span class="ft-item" id="autostop-item" title="Configurer l'arrêt automatique">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
              stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <circle cx="12" cy="13" r="8"/>
           <path d="M12 9 v4 l2.5 1.5"/>
           <path d="M9 2 h6"/>
         </svg>
-        <span>Arrêt automatique</span>
+        <span id="autostop-label">Arrêt automatique</span>
       </span>
       <span class="ft-item" id="frame-count-item" style="display:none">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
