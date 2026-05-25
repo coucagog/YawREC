@@ -1,4 +1,5 @@
 import { defineConfig } from "vite";
+import { fileURLToPath } from "url";
 
 // https://vitejs.dev/config/
 export default defineConfig(async () => ({
@@ -24,5 +25,11 @@ export default defineConfig(async () => ({
     minify: !process.env.TAURI_DEBUG ? "esbuild" : false,
     sourcemap: !!process.env.TAURI_DEBUG,
     outDir: "dist",
+    rollupOptions: {
+      input: {
+        main:   fileURLToPath(new URL("./index.html",          import.meta.url)),
+        picker: fileURLToPath(new URL("./region-picker.html",  import.meta.url)),
+      },
+    },
   },
 }));

@@ -81,6 +81,8 @@ pub struct RecorderState {
     pub screen_id: Option<u32>,
     /// HWND de la fenêtre sélectionnée pour le mode Window (i64 = isize cross-plateforme).
     pub selected_hwnd: Option<i64>,
+    /// Zone sélectionnée pour le mode Region (x, y, w, h en pixels physiques).
+    pub selected_region: Option<(i32, i32, u32, u32)>,
 
     /// Audio
     pub mic_enabled: bool,
@@ -137,6 +139,7 @@ impl Default for RecorderState {
             output_dir: None,
             screen_id: None,
             selected_hwnd: None,
+            selected_region: None,
             mic_enabled: true,
             loopback_enabled: false,
             mic_device_name: None,

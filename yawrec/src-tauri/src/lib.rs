@@ -116,6 +116,8 @@ pub fn run() {
             commands::list_windows,
             commands::set_window_hwnd,
             commands::reveal_in_explorer,
+            commands::set_region,
+            commands::open_region_picker,
         ])
         .setup(move |app| {
             // ----------------------------------------------------

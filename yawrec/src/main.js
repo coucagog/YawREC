@@ -129,10 +129,18 @@ const recorder = new Recorder({
 });
 
 // Bouton REC central
-document.getElementById("btn-rec").addEventListener("click", () => {
+document.getElementById("btn-rec").addEventListener("click", async () => {
   closeAllPopovers();
-  if (recorder.phase === "idle") recorder.start();
-  else recorder.stop();
+  if (recorder.phase === "idle") {
+    // En mode région sans zone définie → ouvrir le picker d'abord
+    if (recorder.mode === "region" && !selectedRegion) {
+      await recorder.openRegionPicker();
+      return;
+    }
+    recorder.start();
+  } else {
+    recorder.stop();
+  }
 });
 
 // Bouton Pause
@@ -367,8 +375,8 @@ document.querySelectorAll(".pip-corner").forEach((btn) => {
 // ============================================================
 
 let selectedScreenId = null;
-
-let selectedHwnd = null;
+let selectedHwnd     = null;
+let selectedRegion   = null; // { x, y, w, h } en pixels physiques, null si non défini
 
 // Mode de capture (segmented control)
 document.querySelectorAll("#mode-seg button[data-mode]").forEach((btn) => {
@@ -385,6 +393,8 @@ document.querySelectorAll("#mode-seg button[data-mode]").forEach((btn) => {
     } else if (btn.dataset.mode === "window") {
       await populateWindowPopover();
       openPopover("popover-window");
+    } else if (btn.dataset.mode === "region") {
+      await recorder.openRegionPicker();
     }
   });
 });
@@ -611,13 +621,7 @@ async function init() {
     document.getElementById("encoder-pill").title = info.codec;
   }
 
-  // Griser les boutons non implémentés (région seulement)
-  document.querySelectorAll(
-    '#mode-seg button[data-mode="region"]'
-  ).forEach((btn) => {
-    btn.classList.add("unimplemented");
-    btn.title = "Non disponible dans cette version";
-  });
+  // Le bouton région est maintenant actif (plus de classe "unimplemented")
 
   // Auto-sélection du microphone : si rien de sauvegardé ou device disparu,
   // prendre le premier mic disponible et l'appliquer immédiatement au backend.
@@ -687,6 +691,18 @@ async function init() {
   // Restaurer l'état d'arrêt automatique
   refreshAutoStopLabel();
   updateAutoStopPresetActive();
+
+  // Écouter la confirmation du picker de région
+  await listen("recorder://region-set", (e) => {
+    const { w, h } = e.payload;
+    selectedRegion = e.payload;
+    document.getElementById("capture-lbl").textContent = `${w} × ${h}`;
+    // Activer le bouton région dans le segmented control si ce n'est pas déjà fait
+    document.querySelectorAll("#mode-seg button").forEach((b) => b.classList.remove("active"));
+    const regionBtn = document.querySelector('#mode-seg button[data-mode="region"]');
+    if (regionBtn) regionBtn.classList.add("active");
+    recorder.mode = "region";
+  });
 }
 
 init();

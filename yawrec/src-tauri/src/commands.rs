@@ -252,6 +252,8 @@ struct VideoWorkerCtx {
     /// Dimensions fixes de la zone de crop (déterminées au démarrage de l'enregistrement).
     crop_w: u32,
     crop_h: u32,
+    /// Zone fixe pour le mode Region (x, y, w, h en pixels physiques).
+    capture_region: Option<(i32, i32, u32, u32)>,
     app: AppHandle,
 }
 
@@ -296,6 +298,13 @@ fn run_video_worker(ctx: VideoWorkerCtx) {
                         if let Some((wx, wy, _, _)) = window::get_window_rect(hwnd) {
                             frame = crop_frame_to_window(&frame, wx, wy, ctx.crop_w, ctx.crop_h);
                         }
+                    }
+                }
+
+                // Region mode : crop fixe sur la zone sélectionnée par le picker.
+                if ctx.capture_mode == CaptureMode::Region {
+                    if let Some((rx, ry, rw, rh)) = ctx.capture_region {
+                        frame = crop_frame_to_window(&frame, rx, ry, rw, rh);
                     }
                 }
 
@@ -442,7 +451,7 @@ pub async fn do_start_recording(app: &AppHandle) -> YawrecResult<()> {
          screen_id, output_path, encoder_arc,
          pip_buffer, webcam_idx, pip_position,
          mic_enabled, loopback_enabled, mic_device_name, mic_gain, mic_level,
-         capture_mode, selected_hwnd, crop_w, crop_h,
+         capture_mode, selected_hwnd, crop_w, crop_h, capture_region,
          mic_monitor_handle_opt) = {
         let mut s = state_mutex.lock().unwrap();
         if s.phase != RecordingPhase::Idle {
@@ -486,6 +495,13 @@ pub async fn do_start_recording(app: &AppHandle) -> YawrecResult<()> {
             (0, 0)
         };
 
+        // Region mode : zone fixe arrondie à pair pour H.264.
+        let capture_region = if s.mode == CaptureMode::Region {
+            s.selected_region.map(|(x, y, w, h)| (x, y, w & !1, h & !1))
+        } else {
+            None
+        };
+
         (
             Arc::clone(&s.stop_flag),
             Arc::clone(&s.audio_paused),
@@ -507,6 +523,7 @@ pub async fn do_start_recording(app: &AppHandle) -> YawrecResult<()> {
             s.selected_hwnd,
             crop_w,
             crop_h,
+            capture_region,
             // Arrêt du monitor VU : le worker audio prend le relais
             { s.mic_monitor_stop.store(true, Ordering::Relaxed); s.mic_monitor_handle.take() },
         )
@@ -533,6 +550,7 @@ pub async fn do_start_recording(app: &AppHandle) -> YawrecResult<()> {
             selected_hwnd,
             crop_w,
             crop_h,
+            capture_region,
             app: app.clone(),
         };
         std::thread::Builder::new()
@@ -543,7 +561,7 @@ pub async fn do_start_recording(app: &AppHandle) -> YawrecResult<()> {
 
     #[cfg(not(target_os = "windows"))]
     let video_handle = {
-        let _ = (screen_id, output_path, byte_count, frame_count, &encoder_arc, &stop_flag, &pip_buffer, capture_mode, selected_hwnd, crop_w, crop_h);
+        let _ = (screen_id, output_path, byte_count, frame_count, &encoder_arc, &stop_flag, &pip_buffer, capture_mode, selected_hwnd, crop_w, crop_h, capture_region);
         log::warn!("Capture écran non implémentée sur cette plateforme — worker vidéo no-op");
         std::thread::Builder::new()
             .name("yawrec-video-worker-noop".into())
@@ -1025,5 +1043,51 @@ pub async fn reveal_in_explorer(path: String) -> YawrecResult<()> {
     std::process::Command::new("explorer")
         .arg(format!("/select,{}", path))
         .spawn()?;
+    Ok(())
+}
+
+// ============================================================
+// Mode Région — picker de zone
+// ============================================================
+
+#[tauri::command]
+pub async fn set_region(
+    x: i32,
+    y: i32,
+    w: u32,
+    h: u32,
+    state: State<'_, Mutex<RecorderState>>,
+    app: AppHandle,
+) -> YawrecResult<()> {
+    {
+        let mut s = state.lock().unwrap();
+        s.selected_region = if w > 0 && h > 0 { Some((x, y, w, h)) } else { None };
+        log::debug!("set_region → ({x},{y},{w}×{h})");
+    }
+    // Notifie la fenêtre principale pour qu'elle mette à jour le label.
+    let _ = app.emit("recorder://region-set", serde_json::json!({ "x": x, "y": y, "w": w, "h": h }));
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn open_region_picker(app: AppHandle) -> YawrecResult<()> {
+    if let Some(w) = app.get_webview_window("region-picker") {
+        let _ = w.show();
+        let _ = w.set_focus();
+        return Ok(());
+    }
+    tauri::WebviewWindowBuilder::new(
+        &app,
+        "region-picker",
+        tauri::WebviewUrl::App("region-picker.html".into()),
+    )
+    .title("YawREC — Sélection région")
+    .decorations(false)
+    .transparent(true)
+    .fullscreen(true)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .build()
+    .map_err(|e| YawrecError::Config(format!("picker : {e}")))?;
     Ok(())
 }

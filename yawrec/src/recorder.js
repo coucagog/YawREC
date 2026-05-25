@@ -165,6 +165,16 @@ export class Recorder {
     catch (err) { this._onError(err); }
   }
 
+  async openRegionPicker() {
+    try { await invoke("open_region_picker"); }
+    catch (err) { this._onError(err); }
+  }
+
+  async setRegion(x, y, w, h) {
+    try { await invoke("set_region", { x, y, w, h }); }
+    catch (err) { this._onError(err); }
+  }
+
   // ---------- Audio config ----------
   async setAudioConfig(micEnabled, loopbackEnabled, micDevice = null) {
     try {
