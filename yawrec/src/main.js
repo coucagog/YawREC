@@ -194,8 +194,8 @@ document.querySelectorAll(".pop-close").forEach((btn) => {
 // AUDIO — popover
 // ============================================================
 
-let micEnabled = true;
-let loopbackEnabled = false; // OFF par défaut — activer manuellement si besoin
+let micEnabled = localStorage.getItem("yawrec_mic_enabled") !== "false"; // défaut true
+let loopbackEnabled = localStorage.getItem("yawrec_loopback") === "true"; // défaut false
 let selectedMicName = localStorage.getItem("yawrec_mic") || null;
 
 const _savedGain = parseFloat(localStorage.getItem("yawrec_mic_gain"));
@@ -258,6 +258,7 @@ document.getElementById("mic-gain-slider").addEventListener("input", async (e) =
 
 document.getElementById("chk-mic").addEventListener("change", async (e) => {
   micEnabled = e.target.checked;
+  localStorage.setItem("yawrec_mic_enabled", String(micEnabled));
   const micList = document.getElementById("mic-devices");
   micList.style.display = micEnabled && micList.children.length > 0 ? "" : "none";
   setGainRowVisible(micEnabled);
@@ -266,6 +267,7 @@ document.getElementById("chk-mic").addEventListener("change", async (e) => {
 
 document.getElementById("chk-loopback").addEventListener("change", async (e) => {
   loopbackEnabled = e.target.checked;
+  localStorage.setItem("yawrec_loopback", String(loopbackEnabled));
   await recorder.setAudioConfig(micEnabled, loopbackEnabled, selectedMicName);
 });
 
@@ -273,8 +275,9 @@ document.getElementById("chk-loopback").addEventListener("change", async (e) => 
 // WEBCAM — popover
 // ============================================================
 
-let webcamEnabled = false;
-let selectedWebcamId = null;
+let webcamEnabled = localStorage.getItem("yawrec_webcam_enabled") === "true"; // défaut false
+const _savedWebcamId = localStorage.getItem("yawrec_webcam_id");
+let selectedWebcamId = _savedWebcamId !== null ? parseInt(_savedWebcamId, 10) : null;
 const PIP_POSITIONS = ["top_left", "top_right", "bottom_left", "bottom_right"];
 const _savedPos = localStorage.getItem("yawrec_pip_pos");
 let pipPosition = PIP_POSITIONS.includes(_savedPos) ? _savedPos : "bottom_right";
@@ -309,6 +312,7 @@ async function populateWebcamPopover() {
       el.addEventListener("click", async (e) => {
         e.stopPropagation();
         selectedWebcamId = devId;
+        localStorage.setItem("yawrec_webcam_id", String(devId));
         list.querySelectorAll(".pop-device").forEach((x) => x.classList.remove("selected"));
         el.classList.add("selected");
         await recorder.setWebcam(devId);
@@ -323,6 +327,7 @@ async function populateWebcamPopover() {
 
 document.getElementById("chk-webcam").addEventListener("change", async (e) => {
   webcamEnabled = e.target.checked;
+  localStorage.setItem("yawrec_webcam_enabled", String(webcamEnabled));
   document.getElementById("webcam-control").classList.toggle("webcam-active", webcamEnabled);
   document.getElementById("webcam-devices").style.display = webcamEnabled ? "" : "none";
   setPipControlsVisible(webcamEnabled);
@@ -371,6 +376,7 @@ document.querySelectorAll("#mode-seg button[data-mode]").forEach((btn) => {
     document.querySelectorAll("#mode-seg button").forEach((b) => b.classList.remove("active"));
     btn.classList.add("active");
     await recorder.setMode(btn.dataset.mode);
+    localStorage.setItem("yawrec_capture_mode", btn.dataset.mode);
 
     // Pour le mode plein écran, afficher le sélecteur d'écran
     if (btn.dataset.mode === "fullscreen") {
@@ -625,10 +631,32 @@ async function init() {
   }
   await recorder.setAudioConfig(micEnabled, loopbackEnabled, selectedMicName);
 
-  // Sync état initial des toggles avec les valeurs par défaut
-  document.getElementById("chk-mic").checked = micEnabled;        // true
-  document.getElementById("chk-loopback").checked = loopbackEnabled; // false
-  document.getElementById("chk-webcam").checked = webcamEnabled;  // false
+  // Sync toggles avec les valeurs restaurées depuis localStorage
+  document.getElementById("chk-mic").checked = micEnabled;
+  document.getElementById("chk-loopback").checked = loopbackEnabled;
+  document.getElementById("chk-webcam").checked = webcamEnabled;
+
+  // Restaurer l'état webcam
+  if (webcamEnabled) {
+    document.getElementById("webcam-control").classList.add("webcam-active");
+    setPipControlsVisible(true);
+    await recorder.setWebcamEnabled(true);
+    if (selectedWebcamId !== null) {
+      await recorder.setWebcam(selectedWebcamId);
+    }
+  }
+
+  // Restaurer le mode de capture
+  const savedMode = localStorage.getItem("yawrec_capture_mode") || "fullscreen";
+  const savedModeBtn = document.querySelector(`#mode-seg button[data-mode="${savedMode}"]`);
+  if (savedModeBtn && !savedModeBtn.classList.contains("unimplemented")) {
+    document.querySelectorAll("#mode-seg button").forEach((b) => b.classList.remove("active"));
+    savedModeBtn.classList.add("active");
+    await recorder.setMode(savedMode);
+    if (savedMode === "fullscreen") {
+      await populateScreenPopover(); // auto-sélection si 1 écran
+    }
+  }
 
   // Gain micro — restaurer la valeur sauvegardée
   const sliderPct = Math.round(micGain * 100);
