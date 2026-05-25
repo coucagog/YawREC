@@ -461,6 +461,87 @@ async function populateWindowPopover() {
 }
 
 // ============================================================
+// QUALITÉ VIDÉO — popover encodeur
+// ============================================================
+
+const _savedFps     = parseInt(localStorage.getItem("yawrec_fps"), 10);
+const _savedBitrate = parseInt(localStorage.getItem("yawrec_bitrate"), 10);
+let videoFps         = isFinite(_savedFps)     && _savedFps     > 0  ? _savedFps     : 30;
+let videoBitrateKbps = isFinite(_savedBitrate) && _savedBitrate > 0  ? _savedBitrate : 8000;
+let _encoderName     = "Encodeur";
+
+function updateQualityActive() {
+  document.querySelectorAll(".quality-preset").forEach((btn) => {
+    btn.classList.toggle("active", parseInt(btn.dataset.kbps, 10) === videoBitrateKbps);
+  });
+  document.querySelectorAll(".fps-btn").forEach((btn) => {
+    btn.classList.toggle("active", parseInt(btn.dataset.fps, 10) === videoFps);
+  });
+}
+
+function updateEncoderPillLabel(encoderName) {
+  const mbps = videoBitrateKbps >= 1000
+    ? (videoBitrateKbps / 1000).toFixed(0) + " Mbps"
+    : videoBitrateKbps + " kbps";
+  document.getElementById("encoder-text").textContent =
+    `${encoderName} · ${mbps} · ${videoFps} fps`;
+}
+
+// Ouvrir/fermer le popover qualité depuis la pill encodeur
+document.getElementById("encoder-pill").addEventListener("click", (e) => {
+  e.stopPropagation();
+  const pop = document.getElementById("popover-quality");
+  if (pop.classList.contains("visible")) {
+    pop.classList.remove("visible");
+    pop.setAttribute("aria-hidden", "true");
+  } else {
+    closeAllPopovers();
+    updateQualityActive();
+    pop.classList.add("visible");
+    pop.setAttribute("aria-hidden", "false");
+  }
+});
+
+document.getElementById("quality-close-btn").addEventListener("click", (e) => {
+  e.stopPropagation();
+  const pop = document.getElementById("popover-quality");
+  pop.classList.remove("visible");
+  pop.setAttribute("aria-hidden", "true");
+});
+
+document.addEventListener("mousedown", (e) => {
+  const pop  = document.getElementById("popover-quality");
+  const pill = document.getElementById("encoder-pill");
+  if (!pop.classList.contains("visible")) return;
+  if (!pop.contains(e.target) && !pill.contains(e.target)) {
+    pop.classList.remove("visible");
+    pop.setAttribute("aria-hidden", "true");
+  }
+});
+
+document.querySelectorAll(".quality-preset").forEach((btn) => {
+  btn.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    videoBitrateKbps = parseInt(btn.dataset.kbps, 10);
+    localStorage.setItem("yawrec_bitrate", String(videoBitrateKbps));
+    updateQualityActive();
+    await recorder.setVideoQuality(videoFps, videoBitrateKbps);
+    updateEncoderPillLabel(_encoderName);
+  });
+});
+
+document.querySelectorAll(".fps-btn").forEach((btn) => {
+  btn.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    videoFps = parseInt(btn.dataset.fps, 10);
+    localStorage.setItem("yawrec_fps", String(videoFps));
+    updateQualityActive();
+    await recorder.setVideoQuality(videoFps, videoBitrateKbps);
+    updateEncoderPillLabel(_encoderName);
+  });
+});
+
+// ============================================================
 // TOAST — enregistrement sauvegardé
 // ============================================================
 
@@ -615,11 +696,14 @@ async function init() {
   // Encoder actif dans le footer
   const info = await recorder.getActiveEncoder();
   if (info) {
-    document.getElementById("encoder-text").textContent = info.hardware
-      ? `MP4 — ${info.display_name}`
-      : `MP4 — ${info.display_name} (CPU)`;
+    _encoderName = info.hardware ? info.display_name : `${info.display_name} (CPU)`;
     document.getElementById("encoder-pill").title = info.codec;
+    updateEncoderPillLabel(_encoderName);
   }
+
+  // Appliquer la qualité sauvegardée au backend
+  await recorder.setVideoQuality(videoFps, videoBitrateKbps);
+  updateQualityActive();
 
   // Le bouton région est maintenant actif (plus de classe "unimplemented")
 

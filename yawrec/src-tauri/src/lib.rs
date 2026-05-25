@@ -118,6 +118,8 @@ pub fn run() {
             commands::reveal_in_explorer,
             commands::set_region,
             commands::open_region_picker,
+            commands::set_video_quality,
+            commands::get_video_quality,
         ])
         .setup(move |app| {
             // ----------------------------------------------------

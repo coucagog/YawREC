@@ -83,6 +83,9 @@ pub struct RecorderState {
     pub selected_hwnd: Option<i64>,
     /// Zone sélectionnée pour le mode Region (x, y, w, h en pixels physiques).
     pub selected_region: Option<(i32, i32, u32, u32)>,
+    /// Qualité vidéo : cadence cible et bitrate.
+    pub video_fps: u32,
+    pub video_bitrate_kbps: u32,
 
     /// Audio
     pub mic_enabled: bool,
@@ -140,6 +143,8 @@ impl Default for RecorderState {
             screen_id: None,
             selected_hwnd: None,
             selected_region: None,
+            video_fps: 30,
+            video_bitrate_kbps: 8000,
             mic_enabled: true,
             loopback_enabled: false,
             mic_device_name: None,

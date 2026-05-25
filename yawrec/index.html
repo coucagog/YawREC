@@ -239,6 +239,35 @@
       </div>
     </div>
 
+    <!-- ---------- Qualité vidéo (popover footer encodeur) ---------- -->
+    <div id="popover-quality" aria-hidden="true">
+      <div class="pop-header">
+        <span id="quality-encoder-name">Qualité vidéo</span>
+        <button class="pop-close" id="quality-close-btn" aria-label="Fermer">✕</button>
+      </div>
+      <div class="quality-section-label">Qualité</div>
+      <div class="quality-presets">
+        <button class="quality-preset" data-kbps="4000">
+          <span class="qp-name">Basse</span><span class="qp-rate">4 Mbps</span>
+        </button>
+        <button class="quality-preset" data-kbps="8000">
+          <span class="qp-name">Moyenne</span><span class="qp-rate">8 Mbps</span>
+        </button>
+        <button class="quality-preset" data-kbps="20000">
+          <span class="qp-name">Haute</span><span class="qp-rate">20 Mbps</span>
+        </button>
+        <button class="quality-preset" data-kbps="40000">
+          <span class="qp-name">Ultra</span><span class="qp-rate">40 Mbps</span>
+        </button>
+      </div>
+      <div class="pop-sep"></div>
+      <div class="quality-section-label">Cadence</div>
+      <div class="fps-btns">
+        <button class="fps-btn" data-fps="30">30 fps</button>
+        <button class="fps-btn" data-fps="60">60 fps</button>
+      </div>
+    </div>
+
     <!-- ---------- Toast "Enregistrement sauvegardé" ---------- -->
     <div id="toast-saved" aria-live="polite" aria-atomic="true">
       <svg class="toast-icon" viewBox="0 0 20 20" fill="none" aria-hidden="true">

@@ -254,6 +254,9 @@ struct VideoWorkerCtx {
     crop_h: u32,
     /// Zone fixe pour le mode Region (x, y, w, h en pixels physiques).
     capture_region: Option<(i32, i32, u32, u32)>,
+    /// Qualité vidéo choisie par l'utilisateur.
+    video_fps: u32,
+    video_bitrate_kbps: u32,
     app: AppHandle,
 }
 
@@ -328,6 +331,8 @@ fn run_video_worker(ctx: VideoWorkerCtx) {
                         output_path: ctx.output_path.clone(),
                         width: frame.width,
                         height: frame.height,
+                        fps: ctx.video_fps,
+                        bitrate_kbps: ctx.video_bitrate_kbps,
                         ..Default::default()
                     };
                     match Encoder::new(config) {
@@ -452,6 +457,7 @@ pub async fn do_start_recording(app: &AppHandle) -> YawrecResult<()> {
          pip_buffer, webcam_idx, pip_position,
          mic_enabled, loopback_enabled, mic_device_name, mic_gain, mic_level,
          capture_mode, selected_hwnd, crop_w, crop_h, capture_region,
+         video_fps, video_bitrate_kbps,
          mic_monitor_handle_opt) = {
         let mut s = state_mutex.lock().unwrap();
         if s.phase != RecordingPhase::Idle {
@@ -524,6 +530,8 @@ pub async fn do_start_recording(app: &AppHandle) -> YawrecResult<()> {
             crop_w,
             crop_h,
             capture_region,
+            s.video_fps,
+            s.video_bitrate_kbps,
             // Arrêt du monitor VU : le worker audio prend le relais
             { s.mic_monitor_stop.store(true, Ordering::Relaxed); s.mic_monitor_handle.take() },
         )
@@ -551,6 +559,8 @@ pub async fn do_start_recording(app: &AppHandle) -> YawrecResult<()> {
             crop_w,
             crop_h,
             capture_region,
+            video_fps,
+            video_bitrate_kbps,
             app: app.clone(),
         };
         std::thread::Builder::new()
@@ -561,7 +571,7 @@ pub async fn do_start_recording(app: &AppHandle) -> YawrecResult<()> {
 
     #[cfg(not(target_os = "windows"))]
     let video_handle = {
-        let _ = (screen_id, output_path, byte_count, frame_count, &encoder_arc, &stop_flag, &pip_buffer, capture_mode, selected_hwnd, crop_w, crop_h, capture_region);
+        let _ = (screen_id, output_path, byte_count, frame_count, &encoder_arc, &stop_flag, &pip_buffer, capture_mode, selected_hwnd, crop_w, crop_h, capture_region, video_fps, video_bitrate_kbps);
         log::warn!("Capture écran non implémentée sur cette plateforme — worker vidéo no-op");
         std::thread::Builder::new()
             .name("yawrec-video-worker-noop".into())
@@ -1067,6 +1077,37 @@ pub async fn set_region(
     // Notifie la fenêtre principale pour qu'elle mette à jour le label.
     let _ = app.emit("recorder://region-set", serde_json::json!({ "x": x, "y": y, "w": w, "h": h }));
     Ok(())
+}
+
+// ============================================================
+// Qualité vidéo — fps + bitrate
+// ============================================================
+
+#[derive(Debug, serde::Serialize)]
+pub struct VideoQualityInfo {
+    pub fps: u32,
+    pub bitrate_kbps: u32,
+}
+
+#[tauri::command]
+pub async fn set_video_quality(
+    fps: u32,
+    bitrate_kbps: u32,
+    state: State<'_, Mutex<RecorderState>>,
+) -> YawrecResult<()> {
+    let mut s = state.lock().unwrap();
+    s.video_fps           = fps.clamp(1, 120);
+    s.video_bitrate_kbps  = bitrate_kbps.clamp(500, 100_000);
+    log::debug!("set_video_quality → {}fps / {}kbps", s.video_fps, s.video_bitrate_kbps);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_video_quality(
+    state: State<'_, Mutex<RecorderState>>,
+) -> YawrecResult<VideoQualityInfo> {
+    let s = state.lock().unwrap();
+    Ok(VideoQualityInfo { fps: s.video_fps, bitrate_kbps: s.video_bitrate_kbps })
 }
 
 #[tauri::command]
