@@ -390,10 +390,10 @@ document.querySelectorAll("#mode-seg button[data-mode]").forEach((btn) => {
     await recorder.setMode(btn.dataset.mode);
     localStorage.setItem("yawrec_capture_mode", btn.dataset.mode);
 
-    // Pour le mode plein écran, afficher le sélecteur d'écran
+    // Pour le mode plein écran, afficher le sélecteur d'écran (sauf si 1 seul écran)
     if (btn.dataset.mode === "fullscreen") {
-      await populateScreenPopover();
-      openPopover("popover-screen");
+      const needsPicker = await populateScreenPopover();
+      if (needsPicker) openPopover("popover-screen");
     } else if (btn.dataset.mode === "window") {
       await populateWindowPopover();
       openPopover("popover-window");
@@ -412,7 +412,7 @@ async function populateScreenPopover() {
     // Un seul écran : le sélectionner automatiquement et ne pas ouvrir le popover
     selectedScreenId = screens[0].id;
     await recorder.setScreen(screens[0].id);
-    return;
+    return false;
   }
 
   screens.forEach((s) => {
@@ -430,6 +430,7 @@ async function populateScreenPopover() {
     });
     list.appendChild(el);
   });
+  return true;
 }
 
 async function populateWindowPopover() {
