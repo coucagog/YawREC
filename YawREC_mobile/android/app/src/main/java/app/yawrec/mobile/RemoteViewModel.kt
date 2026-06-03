@@ -1,6 +1,7 @@
 package app.yawrec.mobile
 
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -31,9 +32,14 @@ sealed class ConnectionState {
 
 // ── ViewModel ────────────────────────────────────────────────────────────────
 
-class RemoteViewModel : ViewModel() {
+private const val PREFS_NAME = "remote_prefs"
+private const val KEY_LAST_IP = "last_ip"
 
-    private val _ip = MutableStateFlow("")
+class RemoteViewModel(app: Application) : AndroidViewModel(app) {
+
+    private val prefs = app.getSharedPreferences(PREFS_NAME, 0)
+
+    private val _ip = MutableStateFlow(prefs.getString(KEY_LAST_IP, "") ?: "")
     val ip: StateFlow<String> = _ip.asStateFlow()
 
     private val _connState = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
@@ -54,10 +60,13 @@ class RemoteViewModel : ViewModel() {
 
     fun onIpChanged(value: String) { _ip.value = value }
 
+    private var lastConnectedHost = ""
+
     fun connect() {
         val host = _ip.value.trim()
         if (host.isEmpty()) return
         disconnect()
+        lastConnectedHost = host
         _connState.value = ConnectionState.Connecting
         _stoppedPath.value = null
         val req = Request.Builder().url("ws://$host:9799").build()
@@ -87,6 +96,7 @@ class RemoteViewModel : ViewModel() {
 
         override fun onOpen(webSocket: WebSocket, response: Response) {
             _connState.value = ConnectionState.Connected
+            prefs.edit().putString(KEY_LAST_IP, lastConnectedHost).apply()
         }
 
         override fun onMessage(webSocket: WebSocket, text: String) {
