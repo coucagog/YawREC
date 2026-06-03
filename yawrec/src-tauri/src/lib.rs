@@ -16,6 +16,7 @@ mod state;
 mod error;
 mod capture;
 mod encoder;
+mod ws_server;
 
 use std::sync::Mutex;
 use std::time::Duration;
@@ -193,6 +194,14 @@ pub fn run() {
                     };
                     let _ = app_vu.emit("recorder://vu", level);
                 }
+            });
+
+            // ----------------------------------------------------
+            // Serveur WebSocket — contrôle à distance Android
+            // ----------------------------------------------------
+            let app_ws = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                crate::ws_server::run(app_ws).await;
             });
 
             log::info!("YawREC · fenêtre prête");

@@ -1,0 +1,3 @@
+-keep class android.media.projection.** { *; }
+-keep class android.media.AudioRecord { *; }
+-keep class android.media.AudioPlaybackCaptureConfiguration { *; }

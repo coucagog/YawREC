@@ -1,0 +1,883 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>YawREC — Mobile · iOS &amp; Android</title>
+<style>
+  /* ============================================================
+     YAWREC · MOBILE
+     iOS 18 — Live Activity (Dynamic Island) + Centre de contrôle
+     Android 15 — Notification ongoing + Bottom sheet Material 3
+     Implémentation pixel-perfect du Design System YawREC v1.0
+     ============================================================ */
+
+  :root {
+    --rec-500: #ef4444;
+    --rec-600: #dc2626;
+    --rec-glow: rgba(239, 68, 68, 0.35);
+    --ok-500:  #4ade80;
+
+    --font-ios: -apple-system, BlinkMacSystemFont, "SF Pro Display",
+                "SF Pro Text", system-ui, sans-serif;
+    --font-android: "Roboto", "Google Sans", system-ui, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+    --font-lcd:  "Share Tech Mono", "DSEG7 Classic", "Menlo",
+                 ui-monospace, monospace;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    height: 100%;
+    margin: 0;
+    background: #06070b;
+    color: #f0f0f0;
+    font-family: var(--font-ios);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 56px 24px;
+    background:
+      radial-gradient(1200px 800px at 30% 20%, #1c2230 0%, #0c0e14 60%, #06070b 100%);
+    overflow-x: hidden;
+  }
+
+  /* ============================================================
+     SCÈNE — deux téléphones côte à côte
+     ============================================================ */
+  .phone-row {
+    display: flex;
+    gap: 56px;
+    align-items: flex-start;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+
+  .phone-frame {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .phone {
+    width: 320px;
+    height: 660px;
+    border-radius: 50px;
+    background: #0a0a0a;
+    border: 8px solid #1a1a1a;
+    box-shadow:
+      0 0 0 1px rgba(255, 255, 255, 0.05) inset,
+      0 30px 80px rgba(0, 0, 0, 0.65),
+      0 8px 20px rgba(0, 0, 0, 0.5);
+    overflow: hidden;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    animation: phone-in 600ms cubic-bezier(0.2, 0.9, 0.3, 1.05) both;
+  }
+  .phone.android { animation-delay: 120ms; }
+  @keyframes phone-in {
+    from { opacity: 0; transform: translateY(16px) scale(0.97); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+  }
+
+  /* Wallpaper sous l'app */
+  .phone .wallpaper {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(180deg, #ff8a65 0%, #ec407a 50%, #5e35b1 100%);
+  }
+  .phone.android .wallpaper {
+    background: linear-gradient(180deg, #1b5e20 0%, #004d40 100%);
+  }
+
+  /* Légende sous chaque téléphone */
+  .legend {
+    width: 320px;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-top: 16px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: #777;
+  }
+  .legend strong {
+    color: #c8c8c8;
+    font-weight: 500;
+    letter-spacing: 0.4px;
+  }
+
+  /* ============================================================
+     COMPOSANTS PARTAGÉS
+     ============================================================ */
+  .lcd {
+    font-family: var(--font-lcd);
+    letter-spacing: 2px;
+    background: linear-gradient(180deg, #f5f5f5 0%, #d8d8d8 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  .rec-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--rec-500);
+    box-shadow: 0 0 6px var(--rec-glow);
+    animation: pulse-dot 1.5s ease-in-out infinite;
+    display: inline-block;
+    vertical-align: middle;
+  }
+  @keyframes pulse-dot {
+    0%, 100% { opacity: 1;   transform: scale(1); }
+    50%      { opacity: 0.4; transform: scale(0.92); }
+  }
+
+  .vu {
+    display: inline-flex;
+    align-items: flex-end;
+    gap: 2px;
+    height: 14px;
+  }
+  .vu .bar {
+    width: 2px;
+    background: var(--ok-500);
+    border-radius: 1px;
+    transform-origin: bottom center;
+    box-shadow: 0 0 4px rgba(74, 222, 128, 0.45);
+  }
+  .vu .b1 { height: 4px;  animation: vu1 0.55s ease-in-out infinite alternate; }
+  .vu .b2 { height: 8px;  animation: vu2 0.45s ease-in-out infinite alternate; }
+  .vu .b3 { height: 12px; animation: vu3 0.50s ease-in-out infinite alternate; }
+  @keyframes vu1 { from { transform: scaleY(0.35); } to { transform: scaleY(1); } }
+  @keyframes vu2 { from { transform: scaleY(1);    } to { transform: scaleY(0.45); } }
+  @keyframes vu3 { from { transform: scaleY(0.55); } to { transform: scaleY(0.95); } }
+
+  /* ============================================================
+     iOS — Statusbar
+     ============================================================ */
+  .ios-statusbar {
+    position: relative;
+    z-index: 2;
+    height: 50px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 28px;
+    color: #fff;
+    font-size: 15px;
+    font-weight: 600;
+  }
+  .ios-statusbar .icons {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .ios-statusbar svg {
+    width: 16px;
+    height: 16px;
+    color: #fff;
+  }
+
+  /* ============================================================
+     iOS — Dynamic Island (Live Activity)
+     ============================================================ */
+  .ios-island {
+    position: absolute;
+    z-index: 3;
+    top: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    height: 36px;
+    padding: 0 14px;
+    background: #000;
+    border-radius: 20px;
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    color: #fff;
+    font-size: 12px;
+    font-weight: 600;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+  }
+  .ios-island .lcd {
+    font-size: 14px;
+    letter-spacing: 1px;
+  }
+  .ios-island .stop {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: var(--rec-500);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: transform 140ms ease;
+  }
+  .ios-island .stop:hover { transform: scale(1.08); }
+  .ios-island .stop:active { transform: scale(0.94); }
+  .ios-island .stop::after {
+    content: "";
+    width: 8px;
+    height: 8px;
+    border-radius: 2px;
+    background: #fff;
+  }
+
+  /* ============================================================
+     iOS — Carte Centre de contrôle (glassmorphism)
+     ============================================================ */
+  .ios-cc {
+    position: absolute;
+    z-index: 2;
+    top: 86px;
+    left: 16px;
+    right: 16px;
+    background: rgba(50, 50, 50, 0.55);
+    backdrop-filter: blur(40px) saturate(180%);
+    -webkit-backdrop-filter: blur(40px) saturate(180%);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 28px;
+    padding: 18px;
+    color: #fff;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+  }
+  .ios-cc-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+  .ios-cc-title .meta-right {
+    margin-left: auto;
+    font-size: 10px;
+    color: rgba(255, 255, 255, 0.6);
+    font-weight: 400;
+  }
+  .ios-cc-sub {
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.7);
+    margin-bottom: 16px;
+  }
+  .ios-cc-timer {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: 16px;
+    background: rgba(0, 0, 0, 0.35);
+    border-radius: 18px;
+    margin-bottom: 14px;
+  }
+  .ios-cc-timer .lcd { font-size: 38px; }
+  .ios-cc-timer .meta {
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.7);
+  }
+
+  .ios-cc-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 8px;
+    margin-bottom: 14px;
+  }
+  .ios-tile {
+    aspect-ratio: 1;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 16px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    color: #fff;
+    cursor: pointer;
+    transition: background 160ms ease, transform 140ms ease;
+  }
+  .ios-tile:hover { background: rgba(255, 255, 255, 0.16); }
+  .ios-tile:active { transform: scale(0.96); }
+  .ios-tile.active {
+    background: rgba(239, 68, 68, 0.85);
+  }
+  .ios-tile.active:hover { background: rgba(239, 68, 68, 0.95); }
+  .ios-tile svg { width: 22px; height: 22px; }
+  .ios-tile span { font-size: 10px; opacity: 0.85; }
+
+  .ios-cc-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .ios-rec-btn {
+    flex: 1;
+    height: 48px;
+    border: none;
+    border-radius: 14px;
+    background: linear-gradient(180deg, #ff6b6b 0%, var(--rec-500) 50%, var(--rec-600) 100%);
+    color: #fff;
+    font-size: 14px;
+    font-weight: 600;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    box-shadow:
+      0 0 20px rgba(239, 68, 68, 0.4),
+      0 4px 10px rgba(220, 38, 38, 0.4);
+    cursor: pointer;
+    transition: transform 140ms ease, box-shadow 140ms ease;
+  }
+  .ios-rec-btn:hover { transform: translateY(-1px); }
+  .ios-rec-btn:active { transform: translateY(0) scale(0.98); }
+  .ios-rec-btn .stop-square {
+    width: 14px;
+    height: 14px;
+    background: #fff;
+    border-radius: 3px;
+  }
+  .ios-icon-btn {
+    width: 48px;
+    height: 48px;
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.12);
+    color: #fff;
+    border: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: background 140ms ease;
+  }
+  .ios-icon-btn:hover { background: rgba(255, 255, 255, 0.18); }
+  .ios-icon-btn svg { width: 18px; height: 18px; }
+
+  /* iOS Home indicator */
+  .ios-home-bar {
+    position: absolute;
+    z-index: 3;
+    bottom: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 130px;
+    height: 5px;
+    border-radius: 3px;
+    background: rgba(255, 255, 255, 0.7);
+  }
+
+  /* ============================================================
+     ANDROID — Statusbar
+     ============================================================ */
+  .and-statusbar {
+    position: relative;
+    z-index: 2;
+    height: 32px;
+    padding: 0 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    color: #fff;
+    font-size: 13px;
+    font-weight: 500;
+  }
+  .and-statusbar .icons {
+    display: flex;
+    gap: 6px;
+  }
+  .and-statusbar svg {
+    width: 14px;
+    height: 14px;
+    color: #fff;
+  }
+
+  /* ============================================================
+     ANDROID — Notification "ongoing" Material 3
+     ============================================================ */
+  .and-notif {
+    position: absolute;
+    z-index: 2;
+    top: 60px;
+    left: 16px;
+    right: 16px;
+    background: #2b2b2e;
+    border-radius: 28px;
+    padding: 16px;
+    color: #e6e1e5;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+    font-family: var(--font-android);
+  }
+  .and-notif-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+  .and-notif-head .ico {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: var(--rec-500);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+  }
+  .and-notif-head .ico::after {
+    content: "";
+    width: 8px;
+    height: 8px;
+    background: #fff;
+    border-radius: 2px;
+  }
+  .and-notif-head strong {
+    font-size: 13px;
+    font-weight: 500;
+    color: #e6e1e5;
+    display: block;
+  }
+  .and-notif-head .meta {
+    font-size: 11px;
+    color: #b0a9b0;
+    margin-top: 2px;
+  }
+
+  .and-notif-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 14px;
+  }
+  .and-notif-row .lcd { font-size: 28px; }
+  .and-notif-row .info {
+    font-size: 12px;
+    color: #b0a9b0;
+    margin-left: auto;
+  }
+
+  .and-notif-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: nowrap;
+  }
+  .and-chip {
+    height: 32px;
+    padding: 0 12px;
+    border-radius: 999px;
+    background: #4a4458;
+    color: #e8def8;
+    border: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    white-space: nowrap;
+    flex: 0 0 auto;
+    font-family: inherit;
+    transition: background 140ms ease;
+  }
+  .and-chip:hover { background: #5a5468; }
+  .and-chip.icon-only {
+    padding: 0;
+    width: 32px;
+    justify-content: center;
+  }
+  .and-chip.tonal {
+    background: var(--rec-500);
+    color: #fff;
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+  .and-chip.tonal:hover { background: #f15555; }
+  .and-chip svg {
+    width: 14px;
+    height: 14px;
+    flex: 0 0 auto;
+  }
+
+  /* ============================================================
+     ANDROID — Bottom sheet Material 3
+     ============================================================ */
+  .and-sheet {
+    position: absolute;
+    z-index: 3;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: #1c1b1f;
+    border-top-left-radius: 28px;
+    border-top-right-radius: 28px;
+    padding: 12px 20px 36px;
+    color: #e6e1e5;
+    font-family: var(--font-android);
+    box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.4);
+  }
+  .and-sheet .grabber {
+    width: 32px;
+    height: 4px;
+    background: #49454f;
+    border-radius: 2px;
+    margin: 0 auto 14px;
+  }
+  .and-sheet h4 {
+    margin: 0 0 4px;
+    font-size: 16px;
+    font-weight: 500;
+    letter-spacing: 0.1px;
+  }
+  .and-sheet .sub {
+    font-size: 12px;
+    color: #b0a9b0;
+    margin-bottom: 14px;
+  }
+
+  .and-tile-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 8px;
+    margin-bottom: 14px;
+  }
+  .and-tile {
+    aspect-ratio: 1.2;
+    background: #2b2930;
+    border-radius: 16px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    color: #cac4d0;
+    cursor: pointer;
+    transition: background 160ms ease;
+  }
+  .and-tile:hover { background: #36343c; }
+  .and-tile.active {
+    background: #4a4458;
+    color: #e8def8;
+  }
+  .and-tile.active:hover { background: #5a5468; }
+  .and-tile svg { width: 20px; height: 20px; }
+  .and-tile span { font-size: 10px; }
+
+  .and-fab-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .and-fab {
+    flex: 1;
+    height: 48px;
+    border-radius: 16px;
+    background: linear-gradient(180deg, #ff6b6b 0%, var(--rec-500) 50%, var(--rec-600) 100%);
+    color: #fff;
+    border: none;
+    font-size: 14px;
+    font-weight: 500;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    box-shadow: 0 4px 14px rgba(239, 68, 68, 0.4);
+    cursor: pointer;
+    font-family: inherit;
+    transition: transform 140ms ease, box-shadow 140ms ease;
+  }
+  .and-fab:hover { transform: translateY(-1px); }
+  .and-fab:active { transform: translateY(0) scale(0.98); }
+  .and-fab .stop-square {
+    width: 12px;
+    height: 12px;
+    background: #fff;
+    border-radius: 3px;
+  }
+  .and-fab-icon {
+    width: 48px;
+    height: 48px;
+    border-radius: 14px;
+    background: #2b2930;
+    color: #e6e1e5;
+    border: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: background 140ms ease;
+  }
+  .and-fab-icon:hover { background: #36343c; }
+  .and-fab-icon svg { width: 18px; height: 18px; }
+
+  /* Android gesture pill */
+  .and-nav-bar {
+    position: absolute;
+    z-index: 4;
+    bottom: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 110px;
+    height: 4px;
+    border-radius: 2px;
+    background: rgba(255, 255, 255, 0.6);
+  }
+</style>
+</head>
+<body>
+
+  <div class="phone-row">
+
+    <!-- ============================================================
+         iOS 18 — Live Activity + Centre de contrôle
+         ============================================================ -->
+    <div class="phone-frame">
+      <div class="phone ios">
+        <div class="wallpaper"></div>
+
+        <!-- Dynamic Island compact YawREC -->
+        <div class="ios-island" role="status" aria-label="Enregistrement YawREC en cours">
+          <span class="rec-dot" aria-hidden="true"></span>
+          <span class="lcd">00:00:15</span>
+          <button class="stop" aria-label="Arrêter l'enregistrement"></button>
+        </div>
+
+        <!-- Statusbar iOS -->
+        <div class="ios-statusbar">
+          <span>9:41</span>
+          <div class="icons" aria-hidden="true">
+            <!-- signal -->
+            <svg viewBox="0 0 24 24" fill="currentColor">
+              <path d="M2 17h2v3H2zM6 14h2v6H6zM10 11h2v9h-2zM14 8h2v12h-2zM18 5h2v15h-2z"/>
+            </svg>
+            <!-- wifi -->
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+              <path d="M2 9 a14 14 0 0 1 20 0"/>
+              <path d="M5 12 a10 10 0 0 1 14 0"/>
+              <path d="M8 15 a6 6 0 0 1 8 0"/>
+              <circle cx="12" cy="18" r="1.2" fill="currentColor"/>
+            </svg>
+            <!-- battery -->
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="2" y="6" width="18" height="12" rx="3"/>
+              <rect x="4" y="8" width="11" height="8" rx="1.5" fill="currentColor"/>
+              <path d="M21 10v4"/>
+            </svg>
+          </div>
+        </div>
+
+        <!-- Centre de contrôle YawREC -->
+        <div class="ios-cc">
+          <div class="ios-cc-title">
+            <span class="rec-dot" aria-hidden="true"></span>
+            <span>YawREC</span>
+            <span class="meta-right">Enregistrement</span>
+          </div>
+          <div class="ios-cc-sub">Live Activity active · iCloud Drive</div>
+
+          <div class="ios-cc-timer">
+            <div class="lcd">00:00:15</div>
+            <div class="meta">1.84 MB · MP4 1080p</div>
+          </div>
+
+          <div class="ios-cc-row">
+            <div class="ios-tile" role="button" tabindex="0" aria-label="Micro">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                   stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="9" y="2" width="6" height="12" rx="3"/>
+                <path d="M5 11a7 7 0 0 0 14 0"/>
+                <path d="M12 18v3"/>
+                <path d="M9 21h6"/>
+              </svg>
+              <span>Micro</span>
+            </div>
+            <div class="ios-tile active" role="button" tabindex="0" aria-label="Caméra activée">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                   stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="6" width="14" height="12" rx="2"/>
+                <path d="M17 10 l4 -2 v8 l-4 -2 z"/>
+              </svg>
+              <span>Caméra</span>
+            </div>
+            <div class="ios-tile" role="button" tabindex="0" aria-label="Minuteur">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                   stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="13" r="8"/>
+                <path d="M12 9v4l2.5 1.5"/>
+                <path d="M9 2h6"/>
+              </svg>
+              <span>Minuteur</span>
+            </div>
+          </div>
+
+          <div class="ios-cc-actions">
+            <button class="ios-rec-btn" aria-label="Arrêter l'enregistrement">
+              <span class="stop-square" aria-hidden="true"></span>
+              Arrêter
+            </button>
+            <button class="ios-icon-btn" aria-label="Pause">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                   stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="6" y="5" width="4" height="14"/>
+                <rect x="14" y="5" width="4" height="14"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="ios-home-bar" aria-hidden="true"></div>
+      </div>
+
+      <div class="legend">
+        <span><strong>iOS 18</strong> · Live Activity + CC tile</span>
+        <span>iPhone</span>
+      </div>
+    </div>
+
+    <!-- ============================================================
+         ANDROID 15 — Notification ongoing + Bottom sheet Material 3
+         ============================================================ -->
+    <div class="phone-frame">
+      <div class="phone android">
+        <div class="wallpaper"></div>
+
+        <!-- Statusbar Android -->
+        <div class="and-statusbar">
+          <span>9:41</span>
+          <div class="icons" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="currentColor">
+              <circle cx="12" cy="12" r="4"/>
+            </svg>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+              <path d="M2 9 a14 14 0 0 1 20 0"/>
+              <path d="M5 12 a10 10 0 0 1 14 0"/>
+              <path d="M8 15 a6 6 0 0 1 8 0"/>
+              <circle cx="12" cy="18" r="1.2" fill="currentColor"/>
+            </svg>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="2" y="6" width="18" height="12" rx="3"/>
+              <rect x="4" y="8" width="11" height="8" rx="1.5" fill="currentColor"/>
+              <path d="M21 10v4"/>
+            </svg>
+          </div>
+        </div>
+
+        <!-- Notification ongoing -->
+        <div class="and-notif" role="status">
+          <div class="and-notif-head">
+            <div class="ico" aria-hidden="true"></div>
+            <div>
+              <strong>YawREC</strong>
+              <div class="meta">Enregistrement en cours · 1.84 MB</div>
+            </div>
+          </div>
+
+          <div class="and-notif-row">
+            <div class="lcd">00:00:15</div>
+            <div class="vu" aria-hidden="true">
+              <span class="bar b1" style="height:6px;"></span>
+              <span class="bar b2" style="height:12px;"></span>
+              <span class="bar b3" style="height:16px;"></span>
+            </div>
+            <div class="info">MP4 · 1080p</div>
+          </div>
+
+          <div class="and-notif-actions">
+            <button class="and-chip tonal" aria-label="Arrêter l'enregistrement">
+              <svg viewBox="0 0 24 24" fill="currentColor">
+                <rect x="6" y="6" width="12" height="12" rx="1"/>
+              </svg>
+              Arrêter
+            </button>
+            <button class="and-chip icon-only" aria-label="Pause">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                   stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="6" y="5" width="4" height="14"/>
+                <rect x="14" y="5" width="4" height="14"/>
+              </svg>
+            </button>
+            <button class="and-chip icon-only" aria-label="Micro">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                   stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="9" y="2" width="6" height="12" rx="3"/>
+                <path d="M5 11a7 7 0 0 0 14 0"/>
+                <path d="M12 18v3"/>
+                <path d="M9 21h6"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <!-- Bottom sheet Material 3 -->
+        <div class="and-sheet">
+          <div class="grabber" aria-hidden="true"></div>
+          <h4>YawREC</h4>
+          <div class="sub">Enregistrement actif · prêt à diffuser</div>
+
+          <div class="and-tile-row">
+            <div class="and-tile active" role="button" tabindex="0" aria-label="Écran activé">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                   stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="5" width="18" height="12" rx="2"/>
+                <path d="M8 21h8"/>
+                <path d="M12 17v4"/>
+              </svg>
+              <span>Écran</span>
+            </div>
+            <div class="and-tile" role="button" tabindex="0" aria-label="Micro">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                   stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="9" y="2" width="6" height="12" rx="3"/>
+                <path d="M5 11a7 7 0 0 0 14 0"/>
+                <path d="M12 18v3"/>
+                <path d="M9 21h6"/>
+              </svg>
+              <span>Micro</span>
+            </div>
+            <div class="and-tile" role="button" tabindex="0" aria-label="Caméra">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                   stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="6" width="14" height="12" rx="2"/>
+                <path d="M17 10 l4 -2 v8 l-4 -2 z"/>
+              </svg>
+              <span>Caméra</span>
+            </div>
+          </div>
+
+          <div class="and-fab-row">
+            <button class="and-fab" aria-label="Arrêter l'enregistrement">
+              <span class="stop-square" aria-hidden="true"></span>
+              Arrêter l'enregistrement
+            </button>
+            <button class="and-fab-icon" aria-label="Plus d'options">
+              <svg viewBox="0 0 24 24" fill="currentColor">
+                <circle cx="5"  cy="12" r="1.6"/>
+                <circle cx="12" cy="12" r="1.6"/>
+                <circle cx="19" cy="12" r="1.6"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="and-nav-bar" aria-hidden="true"></div>
+      </div>
+
+      <div class="legend">
+        <span><strong>Android 15</strong> · Material 3 · sheet + ongoing</span>
+        <span>Pixel</span>
+      </div>
+    </div>
+
+  </div>
+
+</body>
+</html>

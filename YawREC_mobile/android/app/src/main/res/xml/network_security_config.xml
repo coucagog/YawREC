@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Autorise le trafic WebSocket non-chiffré (ws://) sur le réseau local.
+    Le serveur YawREC écoute en ws:// sur le LAN — pas besoin de TLS en local.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>
