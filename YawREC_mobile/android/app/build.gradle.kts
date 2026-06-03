@@ -57,6 +57,9 @@ dependencies {
     // WebSocket client pour le contrôle à distance du bureau
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
+    // Scanner QR code (ZXing intent-based — simple, pas de CameraX nécessaire)
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
+
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation(composeBom)
 }

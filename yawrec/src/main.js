@@ -6,7 +6,9 @@
 
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
 import { Recorder } from "./recorder.js";
+import QRCode from "qrcode";
 
 const appWindow = getCurrentWindow();
 
@@ -176,6 +178,8 @@ function closeAllPopovers() {
   if (outp) { outp.classList.remove("visible"); outp.setAttribute("aria-hidden", "true"); }
   const qualp = document.getElementById("popover-quality");
   if (qualp) { qualp.classList.remove("visible"); qualp.setAttribute("aria-hidden", "true"); }
+  const qrp = document.getElementById("popover-qr");
+  if (qrp) { qrp.classList.remove("visible"); qrp.setAttribute("aria-hidden", "true"); }
   currentPopover = null;
 }
 
@@ -868,6 +872,41 @@ async function init() {
     recorder.mode = "region";
   });
 }
+
+// ============================================================
+// QR CODE — connexion app mobile
+// ============================================================
+
+const qrItem   = document.getElementById("qr-item");
+const qrPopover = document.getElementById("popover-qr");
+
+qrItem.addEventListener("click", async (e) => {
+  e.stopPropagation();
+  if (qrPopover.classList.contains("visible")) {
+    qrPopover.classList.remove("visible");
+    qrPopover.setAttribute("aria-hidden", "true");
+    return;
+  }
+  closeAllPopovers();
+  const ip = await invoke("get_local_ip");
+  const canvas = document.getElementById("qr-canvas");
+  await QRCode.toCanvas(canvas, `yawrec://${ip}:9799`, {
+    width: 144,
+    margin: 1,
+    color: { dark: "#1a1a2e", light: "#ffffff" },
+  });
+  document.getElementById("qr-ip-text").textContent = `${ip} : 9799`;
+  qrPopover.classList.add("visible");
+  qrPopover.setAttribute("aria-hidden", "false");
+});
+
+document.addEventListener("mousedown", (e) => {
+  if (!qrPopover.classList.contains("visible")) return;
+  if (!qrPopover.contains(e.target) && !qrItem.contains(e.target)) {
+    qrPopover.classList.remove("visible");
+    qrPopover.setAttribute("aria-hidden", "true");
+  }
+});
 
 init();
 

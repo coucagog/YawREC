@@ -60,6 +60,11 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
 
     fun onIpChanged(value: String) { _ip.value = value }
 
+    fun fillIpAndConnect(ip: String) {
+        _ip.value = ip
+        connect()
+    }
+
     private var lastConnectedHost = ""
 
     fun connect() {

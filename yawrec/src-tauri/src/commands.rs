@@ -1151,3 +1151,12 @@ pub async fn open_region_picker(app: AppHandle) -> YawrecResult<()> {
     .map_err(|e| YawrecError::Config(format!("picker : {e}")))?;
     Ok(())
 }
+
+#[tauri::command]
+pub fn get_local_ip() -> String {
+    use std::net::UdpSocket;
+    UdpSocket::bind("0.0.0.0:0")
+        .and_then(|s| { s.connect("8.8.8.8:80")?; s.local_addr() })
+        .map(|a| a.ip().to_string())
+        .unwrap_or_else(|_| "127.0.0.1".to_string())
+}

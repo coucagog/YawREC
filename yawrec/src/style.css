@@ -990,3 +990,46 @@ html, body {
   background: rgba(96, 165, 250, 0.13);
   color: var(--accent-blue);
 }
+
+/* ============================================================
+   QR CODE — Popover connexion mobile
+   ============================================================ */
+
+#qr-item { cursor: pointer; }
+
+#qr-item { cursor: pointer; }
+
+#popover-qr {
+  position: absolute;
+  bottom: 36px;
+  right: 8px;
+  width: 168px;
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  background: #1e1e2a;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 10px;
+  padding: 10px 10px 8px;
+  box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.5);
+}
+#popover-qr.visible { display: flex; }
+
+#qr-canvas {
+  border-radius: 6px;
+  display: block;
+}
+
+.qr-ip {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+  letter-spacing: 0.4px;
+}
+
+.qr-hint {
+  font-size: 9px;
+  color: var(--text-muted);
+  text-align: center;
+}

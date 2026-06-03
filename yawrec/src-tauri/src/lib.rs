@@ -122,6 +122,7 @@ pub fn run() {
             commands::set_video_quality,
             commands::get_video_quality,
             commands::set_filename_prefix,
+            commands::get_local_ip,
         ])
         .setup(move |app| {
             // ----------------------------------------------------

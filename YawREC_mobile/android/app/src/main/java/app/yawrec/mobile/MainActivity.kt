@@ -11,6 +11,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -103,7 +105,7 @@ class MainActivity : ComponentActivity() {
                                 onToggleMic      = ::toggleMic,
                                 onToggleCamera   = ::toggleCamera,
                             )
-                            1 -> RemoteScreen(remoteViewModel)
+                            1 -> RemoteScreen(remoteViewModel, onScanQr = ::launchQrScanner)
                         }
                     }
                 }
@@ -171,6 +173,22 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         if (granted) serviceIntent(RecordingService.ACTION_TOGGLE_CAMERA)
+    }
+
+    private val qrScanLauncher = registerForActivityResult(ScanContract()) { result ->
+        val raw = result.contents ?: return@registerForActivityResult
+        // Contenu attendu : "yawrec://192.168.1.10:9799"
+        val ip = raw.removePrefix("yawrec://").substringBefore(":").trim()
+        if (ip.isNotEmpty()) remoteViewModel.fillIpAndConnect(ip)
+    }
+
+    fun launchQrScanner() {
+        val opts = ScanOptions()
+            .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+            .setPrompt("Scanner le QR code YawREC")
+            .setBeepEnabled(false)
+            .setOrientationLocked(false)
+        qrScanLauncher.launch(opts)
     }
 
     private fun serviceIntent(action: String) {

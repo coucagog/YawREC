@@ -9,6 +9,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.outlined.QrCodeScanner
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -28,7 +29,7 @@ import app.yawrec.mobile.RemoteViewModel
 import app.yawrec.mobile.ui.theme.*
 
 @Composable
-fun RemoteScreen(viewModel: RemoteViewModel) {
+fun RemoteScreen(viewModel: RemoteViewModel, onScanQr: () -> Unit = {}) {
     val ip          by viewModel.ip.collectAsStateWithLifecycle()
     val connState   by viewModel.connState.collectAsStateWithLifecycle()
     val status      by viewModel.desktopStatus.collectAsStateWithLifecycle()
@@ -64,6 +65,19 @@ fun RemoteScreen(viewModel: RemoteViewModel) {
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
+                IconButton(
+                    onClick = onScanQr,
+                    modifier = Modifier.size(48.dp),
+                    enabled = !isConnected && !isConnecting,
+                ) {
+                    Icon(
+                        Icons.Outlined.QrCodeScanner,
+                        contentDescription = "Scanner QR code",
+                        tint = if (isConnected || isConnecting) Muted else OnSurface,
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
+
                 OutlinedTextField(
                     value = ip,
                     onValueChange = viewModel::onIpChanged,
