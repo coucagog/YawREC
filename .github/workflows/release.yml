@@ -2,6 +2,10 @@
 # YAWREC · workflow release
 # Déclenché sur push de tag v* → build Windows + publication
 # automatique en draft GitHub Release.
+#
+# Le workflow doit vivre à la racine du dépôt (.github/ à la racine) :
+# GitHub ignore les dossiers .github/ des sous-répertoires. Les étapes
+# s'exécutent dans yawrec/ via `defaults.run.working-directory`.
 # =============================================================
 name: Release
 
@@ -14,6 +18,13 @@ on:
 jobs:
   build-windows:
     runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: yawrec
+    env:
+      # Exposé au niveau job pour pouvoir conditionner l'étape de signature
+      # (un `if:` ne voit pas l'env défini sur l'étape elle-même).
+      WINDOWS_PFX_BASE64: ${{ secrets.WINDOWS_PFX_BASE64 }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -27,13 +38,14 @@ jobs:
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri
+          workspaces: yawrec/src-tauri
 
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: "20"
           cache: npm
+          cache-dependency-path: yawrec/package-lock.json
 
       - name: Install FFmpeg dev libs
         shell: pwsh
@@ -68,7 +80,6 @@ jobs:
         if: ${{ env.WINDOWS_PFX_BASE64 != '' }}
         shell: pwsh
         env:
-          WINDOWS_PFX_BASE64: ${{ secrets.WINDOWS_PFX_BASE64 }}
           WINDOWS_PFX_PASSWORD: ${{ secrets.WINDOWS_PFX_PASSWORD }}
         run: |
           $pfx = "$env:RUNNER_TEMP\cert.pfx"
@@ -88,7 +99,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: yawrec-windows-${{ github.ref_name }}
-          path: artifacts/
+          path: yawrec/artifacts/
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
@@ -96,4 +107,4 @@ jobs:
         with:
           draft: true
           generate_release_notes: true
-          files: artifacts/*
+          files: yawrec/artifacts/*
