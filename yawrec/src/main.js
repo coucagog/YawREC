@@ -222,6 +222,11 @@ let selectedMicName = localStorage.getItem("yawrec_mic") || null;
 const _savedGain = parseFloat(localStorage.getItem("yawrec_mic_gain"));
 let micGain = isFinite(_savedGain) && _savedGain >= 0 ? _savedGain : 1.0;
 
+// Retard du son système (ms) : le loopback capte le son avant la latence de
+// sortie, alors qu'un navigateur cale l'image sur le son entendu.
+const _savedDelay = parseInt(localStorage.getItem("yawrec_loopback_delay"), 10);
+let loopbackDelayMs = isFinite(_savedDelay) && _savedDelay >= 0 ? Math.min(_savedDelay, 500) : 0;
+
 document.getElementById("audio-control").addEventListener("click", async (e) => {
   if (currentPopover === "popover-audio") {
     closeAllPopovers();
@@ -289,7 +294,23 @@ document.getElementById("chk-mic").addEventListener("change", async (e) => {
 document.getElementById("chk-loopback").addEventListener("change", async (e) => {
   loopbackEnabled = e.target.checked;
   localStorage.setItem("yawrec_loopback", String(loopbackEnabled));
+  setLoopbackDelayRowVisible(loopbackEnabled);
   await recorder.setAudioConfig(micEnabled, loopbackEnabled, selectedMicName);
+});
+
+function updateLoopbackDelayLabel(ms) {
+  document.getElementById("loopback-delay-label").textContent = ms > 0 ? `+${ms} ms` : "0 ms";
+}
+
+function setLoopbackDelayRowVisible(visible) {
+  document.getElementById("loopback-delay-row").classList.toggle("hidden", !visible);
+}
+
+document.getElementById("loopback-delay-slider").addEventListener("input", async (e) => {
+  loopbackDelayMs = parseInt(e.target.value, 10);
+  localStorage.setItem("yawrec_loopback_delay", String(loopbackDelayMs));
+  updateLoopbackDelayLabel(loopbackDelayMs);
+  await recorder.setLoopbackDelay(loopbackDelayMs);
 });
 
 // ============================================================
@@ -868,6 +889,12 @@ async function init() {
   updateGainLabel(micGain);
   setGainRowVisible(micEnabled);
   await recorder.setMicGain(micGain);
+
+  // Décalage du son système — restaurer la valeur sauvegardée
+  document.getElementById("loopback-delay-slider").value = String(loopbackDelayMs);
+  updateLoopbackDelayLabel(loopbackDelayMs);
+  setLoopbackDelayRowVisible(loopbackEnabled);
+  await recorder.setLoopbackDelay(loopbackDelayMs);
 
   // Initialiser le sélecteur de position PiP
   updatePipCornerActive(pipPosition);

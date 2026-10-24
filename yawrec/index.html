@@ -171,6 +171,14 @@
             <span class="track"></span>
           </label>
         </div>
+        <div class="pop-row gain-row" id="loopback-delay-row"
+             title="Retarde le son système pour le caler sur l'image. Une vidéo lue dans un navigateur arrive en général ~100 ms trop tôt. Appliqué au prochain enregistrement.">
+          <span class="pop-label">Décalage</span>
+          <div class="gain-ctrl">
+            <input type="range" id="loopback-delay-slider" min="0" max="500" value="0" step="10" aria-label="Retard du son système">
+            <span class="gain-label" id="loopback-delay-label">0 ms</span>
+          </div>
+        </div>
       </div>
 
       <!-- Popover Webcam -->

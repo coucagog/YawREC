@@ -511,6 +511,7 @@ struct AudioWorkerCtx {
     mic_device_name: Option<String>,
     mic_gain: Arc<AtomicU32>,
     mic_level: Arc<AtomicU32>,
+    loopback_delay_ms: u32,
     app: AppHandle,
 }
 
@@ -528,6 +529,7 @@ fn run_audio_worker(ctx: AudioWorkerCtx) {
         ctx.mic_device_name.as_deref(),
         ctx.mic_gain,
         ctx.mic_level,
+        ctx.loopback_delay_ms,
         ctx.epoch,
     ) {
         Ok(c) => c,
@@ -538,7 +540,10 @@ fn run_audio_worker(ctx: AudioWorkerCtx) {
         }
     };
 
-    log::info!("Audio sources : micro={}, loopback={}", capturer.has_mic(), capturer.has_loopback());
+    log::info!(
+        "Audio sources : micro={}, loopback={} (retard {} ms)",
+        capturer.has_mic(), capturer.has_loopback(), ctx.loopback_delay_ms,
+    );
 
     // Encode un chunk ; false si l'encodeur a échoué.
     let push = |chunk: &[f32], pos_ms: u64| -> bool {
@@ -737,6 +742,7 @@ pub async fn do_start_recording(app: &AppHandle) -> YawrecResult<()> {
             mic_device_name: s.mic_device_name.clone(),
             mic_gain: Arc::clone(&s.mic_gain),
             mic_level: Arc::clone(&s.mic_level),
+            loopback_delay_ms: s.loopback_delay_ms,
             app: app.clone(),
         };
 
@@ -1158,6 +1164,18 @@ pub async fn set_mic_gain(
     let s = state.lock().unwrap();
     s.mic_gain.store(gain.to_bits(), Ordering::Relaxed);
     log::debug!("set_mic_gain → {:.3} ({:.1} dB)", gain, 20.0 * gain.max(1e-6).log10());
+    Ok(())
+}
+
+/// Retard du son système (ms), appliqué au prochain enregistrement.
+#[tauri::command]
+pub async fn set_loopback_delay(
+    delay_ms: u32,
+    state: State<'_, Mutex<RecorderState>>,
+) -> YawrecResult<()> {
+    let delay_ms = delay_ms.min(crate::state::LOOPBACK_DELAY_MAX_MS);
+    state.lock().unwrap().loopback_delay_ms = delay_ms;
+    log::debug!("set_loopback_delay → {delay_ms} ms");
     Ok(())
 }
 

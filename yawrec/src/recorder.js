@@ -175,6 +175,11 @@ export class Recorder {
     catch (err) { this._onError(err); }
   }
 
+  async setLoopbackDelay(delayMs) {
+    try { await invoke("set_loopback_delay", { delayMs }); }
+    catch (err) { this._onError(err); }
+  }
+
   async revealInExplorer(path) {
     try { await invoke("reveal_in_explorer", { path }); }
     catch (err) { this._onError(err); }

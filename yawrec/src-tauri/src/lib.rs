@@ -121,6 +121,7 @@ pub fn run() {
             commands::get_output_directory,
             commands::set_pip_position,
             commands::set_mic_gain,
+            commands::set_loopback_delay,
             commands::list_windows,
             commands::set_window_hwnd,
             commands::reveal_in_explorer,

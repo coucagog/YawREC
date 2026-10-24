@@ -197,6 +197,8 @@ pub struct AudioCapturer {
     emit_pos: u64,
     mic_gain:  Arc<AtomicU32>,
     mic_level: Arc<AtomicU32>, // VU partagé avec RecorderState
+    /// Retard du son système (frames) : il est lu à `pos − delay`.
+    loopback_delay_frames: u64,
 }
 
 impl AudioCapturer {
@@ -212,6 +214,7 @@ impl AudioCapturer {
         mic_device_name: Option<&str>,
         mic_gain:  Arc<AtomicU32>,
         mic_level: Arc<AtomicU32>,
+        loopback_delay_ms: u32,
         epoch: Instant,
     ) -> Result<Self, AudioError> {
         let host = cpal::default_host();
@@ -299,6 +302,7 @@ impl AudioCapturer {
             emit_pos: 0,
             mic_gain,
             mic_level,
+            loopback_delay_frames: ms_to_frames(loopback_delay_ms as u64),
         })
     }
 
@@ -339,8 +343,10 @@ impl AudioCapturer {
 
         if let Some(lb) = &self.loopback {
             let mut l = vec![0.0f32; CHUNK_SAMPLES];
+            // Retard : on lit le son système d'il y a `delay`. Le tampon
+            // (2 s) garde ces données, la lecture restant monotone.
             if let Ok(mut g) = lb.lock() {
-                g.read_into(pos, &mut l);
+                g.read_into(pos.saturating_sub(self.loopback_delay_frames), &mut l);
             }
             for (d, s) in mixed.iter_mut().zip(l) { *d += s; }
         }

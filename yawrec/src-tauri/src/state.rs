@@ -71,6 +71,9 @@ pub enum RecordingPhase {
     Paused,
 }
 
+/// Retard maximal du son système, en ms.
+pub const LOOPBACK_DELAY_MAX_MS: u32 = 500;
+
 pub struct RecorderState {
     pub phase: RecordingPhase,
     pub started_at: Option<Instant>,
@@ -122,6 +125,12 @@ pub struct RecorderState {
     /// Gain linéaire appliqué aux samples micro avant mixage (f32 stocké en bits).
     /// 1.0 = unité, 0.0 = muet, 2.0 = +6 dB. Modifiable en live.
     pub mic_gain: Arc<AtomicU32>,
+    /// Retard appliqué au son système (ms), lu au démarrage d'un
+    /// enregistrement. Le loopback capte le son avant la latence de sortie,
+    /// alors qu'un lecteur (navigateur…) cale l'image sur le son entendu :
+    /// sans correction, le son système arrive en avance (~115 ms mesurés
+    /// avec Chrome). Voir [`LOOPBACK_DELAY_MAX_MS`].
+    pub loopback_delay_ms: u32,
     /// Niveau RMS du micro (f32 bits, 0.0–1.0). Mis à jour par l'AudioMonitor
     /// (repos) ou le worker audio (enregistrement). Lu par la boucle tick → VU.
     pub mic_level: Arc<AtomicU32>,
@@ -164,6 +173,7 @@ impl Default for RecorderState {
             pip_buffer: None,
             pip_position: Arc::new(AtomicU8::new(PipPosition::BottomRight.to_u8())),
             mic_gain:  Arc::new(AtomicU32::new(1.0f32.to_bits())),
+            loopback_delay_ms: 0,
             mic_level: Arc::new(AtomicU32::new(0f32.to_bits())),
             mic_monitor_stop:   Arc::new(AtomicBool::new(false)),
             mic_monitor_handle: None,
