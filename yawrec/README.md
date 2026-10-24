@@ -42,13 +42,16 @@ yawrec/
 | Node.js | LTS ≥ 20 | `node -v` |
 | Visual Studio Build Tools | 2022, workload "Desktop development with C++" | `cl` |
 | WebView2 Runtime | préinstallé sur Win 11 | — |
-| Tauri CLI | ^2.0 | `cargo install tauri-cli --version "^2.0"` |
-| FFmpeg dev libs | 7.x | voir ci-dessous |
+| Tauri CLI | ^2.0 | `npx tauri` (fourni par `npm install`) ou `cargo install tauri-cli --version "^2.0"` |
+| FFmpeg dev libs | 7.x ou 8.x (**pas 9**) | voir ci-dessous |
 
 ### Installer FFmpeg dev libs sur Windows
 
-1. Télécharger un build **shared + dev** depuis https://www.gyan.dev/ffmpeg/builds/
-   (`ffmpeg-release-full-shared.7z`).
+1. Télécharger un build **full_build-shared** 7.x ou 8.x depuis
+   https://github.com/GyanD/codexffmpeg/releases (la CI utilise la 7.1).
+   Ne pas prendre le lien « release » de gyan.dev : il pointe sur FFmpeg 9,
+   dont l'API n'est pas compatible avec `ffmpeg-next` 8 (`build.ps1` le
+   refuse en pré-flight).
 2. Extraire vers `C:\ffmpeg` (doit contenir `include/`, `lib/`, `bin/`).
 3. PowerShell admin :
    ```powershell

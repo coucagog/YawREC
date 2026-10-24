@@ -45,12 +45,16 @@ try {
     Check-Tool "node"  "winget install OpenJS.NodeJS.LTS"
     Check-Tool "npm"   "fourni avec node"
 
-    if (-not (cargo tauri --version 2>$null)) {
-        Write-Host "✗ tauri CLI non installé" -ForegroundColor Red
-        Write-Host "  → cargo install tauri-cli --version `"^2.0`"" -ForegroundColor Yellow
-        exit 1
+    # CLI Tauri : `cargo tauri` si installé, sinon celle du package.json
+    # (npx, disponible après npm install). npx.cmd plutôt que npx : le
+    # wrapper npx.ps1 de PowerShell avale certains arguments.
+    if (cargo tauri --version 2>$null) {
+        $tauriExe = "cargo"; $tauriArgs = @("tauri")
+        Write-Host "✓ tauri CLI (cargo tauri)" -ForegroundColor Green
+    } else {
+        $tauriExe = "npx.cmd"; $tauriArgs = @("tauri")
+        Write-Host "✓ tauri CLI (npx tauri, cargo tauri absent)" -ForegroundColor Green
     }
-    Write-Host "✓ tauri CLI" -ForegroundColor Green
 
     if (-not $env:FFMPEG_DIR) {
         Write-Host "✗ FFMPEG_DIR non défini" -ForegroundColor Red
@@ -69,6 +73,19 @@ try {
         exit 1
     }
     Write-Host "✓ Headers FFmpeg présents" -ForegroundColor Green
+
+    # ffmpeg-next 8 compile avec FFmpeg 7.x et 8.x (libavcodec 61 / 62).
+    # FFmpeg 9 (libavcodec 63) a retiré des API qu'il utilise, or le lien
+    # « release » de gyan.dev pointe désormais sur la 9.
+    $avcodec = Get-ChildItem (Join-Path $env:FFMPEG_DIR "bin") -Filter "avcodec-*.dll" -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if (-not $avcodec -or $avcodec.Name -notmatch '^avcodec-(61|62)\.dll$') {
+        $found = if ($avcodec) { $avcodec.Name } else { "aucune avcodec-*.dll" }
+        Write-Host "✗ FFmpeg 7.x ou 8.x attendu (avcodec-61/62.dll), trouvé : $found" -ForegroundColor Red
+        Write-Host "  → Prendre un build « full_build-shared » 8.x sur https://github.com/GyanD/codexffmpeg/releases" -ForegroundColor Yellow
+        exit 1
+    }
+    Write-Host "✓ Version FFmpeg compatible ($($avcodec.Name))" -ForegroundColor Green
 
     # Icônes
     $icon_ico = Join-Path $root "src-tauri\icons\icon.ico"
@@ -125,15 +142,15 @@ try {
     # On relâche temporairement pour que cargo puisse écrire en stderr sans planter le script.
     $ErrorActionPreference = "Continue"
     if ($BuildDebug) {
-        Write-Host "═══ cargo tauri build (DEBUG) ═══" -ForegroundColor Cyan
-        & cargo tauri build --debug
+        Write-Host "═══ tauri build (DEBUG) ═══" -ForegroundColor Cyan
+        & $tauriExe @tauriArgs build --debug
     } else {
-        Write-Host "═══ cargo tauri build (RELEASE) ═══" -ForegroundColor Cyan
-        & cargo tauri build
+        Write-Host "═══ tauri build (RELEASE) ═══" -ForegroundColor Cyan
+        & $tauriExe @tauriArgs build
     }
     $buildExit = $LASTEXITCODE
     $ErrorActionPreference = "Stop"
-    if ($buildExit -ne 0) { throw "cargo tauri build a échoué (code $buildExit)" }
+    if ($buildExit -ne 0) { throw "tauri build a échoué (code $buildExit)" }
 
     # =========================================================
     # Résultats
