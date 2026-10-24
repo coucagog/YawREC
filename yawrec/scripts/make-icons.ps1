@@ -1,4 +1,4 @@
-# =============================================================
+﻿# =============================================================
 # YAWREC · make-icons.ps1
 # Génère toutes les icônes requises par Tauri depuis docs/icon-source.svg
 #

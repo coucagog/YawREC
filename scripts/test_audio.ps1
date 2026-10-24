@@ -1,13 +1,42 @@
-# ============================================================
+﻿# ============================================================
 # YawREC · test_audio.ps1
 # Tests automatisés : enregistrement audio, pause, qualité MP4
+#
+# Usage :
+#   .\scripts\test_audio.ps1                         # exe de target\release
+#   .\scripts\test_audio.ps1 -ExePath C:\yawrec\yawrec.exe
+# ffprobe est cherché dans le PATH, puis dans $env:FFMPEG_DIR\bin.
+#
+# Fichier en UTF-8 avec BOM : sans BOM, Windows PowerShell 5.1 le lit en
+# ANSI et les caractères accentués cassent le parsing.
 # ============================================================
 
 param(
-    [string]$ExePath = "I:\yawrec-tauri-g1\yawrec\src-tauri\target\release\yawrec.exe",
-    [string]$FfprobePath = "C:\ffmpeg\bin\ffprobe.exe",
+    [string]$ExePath = (Join-Path $PSScriptRoot "..\yawrec\src-tauri\target\release\yawrec.exe"),
+    [string]$FfprobePath = "",
     [string]$OutputDir = "$env:USERPROFILE\Videos\YawREC"
 )
+
+if (-not $FfprobePath) {
+    $cmd = Get-Command ffprobe -ErrorAction SilentlyContinue
+    if ($cmd) { $FfprobePath = $cmd.Source }
+    elseif ($env:FFMPEG_DIR) { $FfprobePath = Join-Path $env:FFMPEG_DIR "bin\ffprobe.exe" }
+}
+if (-not $FfprobePath -or -not (Test-Path $FfprobePath)) {
+    Write-Host "[TEST] ffprobe introuvable : l'ajouter au PATH ou passer -FfprobePath" -ForegroundColor Red
+    exit 1
+}
+
+# Seuls les MP4 écrits après ce instant comptent : un ancien fichier du
+# dossier de sortie ne doit pas faire passer le test.
+$testStart = Get-Date
+
+# Renvoie le MP4 le plus récent créé pendant le test (hors $Exclude).
+function Get-NewMp4($Exclude) {
+    Get-ChildItem -Path $OutputDir -Filter "*.mp4" -ErrorAction SilentlyContinue |
+        Where-Object { $_.LastWriteTime -gt $testStart -and $_.FullName -ne $Exclude } |
+        Sort-Object LastWriteTime -Descending | Select-Object -First 1
+}
 
 $errors = @()
 $results = @()
@@ -23,6 +52,12 @@ else { Fail "yawrec.exe présent" "Fichier introuvable : $ExePath"; exit 1 }
 
 # ---- 2. Démarrer l'app ----
 Log "=== 2. Démarrage ==="
+# L'app est mono-instance : une instance déjà ouverte recevrait les
+# raccourcis et la nouvelle se fermerait aussitôt.
+if (Get-Process -Name "yawrec" -ErrorAction SilentlyContinue) {
+    Fail "App démarrée" "YawREC tourne déjà : le fermer (icône de la barre des tâches → Quitter) avant le test"
+    exit 1
+}
 $proc = Start-Process $ExePath -PassThru
 Start-Sleep -Seconds 3
 
@@ -42,7 +77,7 @@ Start-Sleep -Seconds 5
 
 # ---- 4. Vérifier le fichier MP4 produit ----
 Log "=== 4. Vérification MP4 ==="
-$mp4Files = Get-ChildItem -Path $OutputDir -Filter "*.mp4" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+$mp4Files = Get-NewMp4 $null
 
 if ($mp4Files) {
     Pass "Fichier MP4 trouvé : $($mp4Files.Name)"
@@ -79,7 +114,7 @@ if ($mp4Files) {
         Fail "Parse ffprobe JSON" $_.Exception.Message
     }
 } else {
-    Fail "Fichier MP4 trouvé" "Aucun fichier dans $OutputDir"
+    Fail "Fichier MP4 trouvé" "Aucun nouveau fichier dans $OutputDir (voir $env:TEMP\yawrec.log)"
 }
 
 # ---- 5. Test pause/reprise (5s rec, pause 3s, reprise 5s) ----
@@ -102,8 +137,8 @@ Log "Arrêt"
 Start-Sleep -Seconds 5
 
 # Vérifier le second MP4
-$mp4Files2 = Get-ChildItem -Path $OutputDir -Filter "*.mp4" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-if ($mp4Files2 -and $mp4Files2.Name -ne $mp4Files.Name) {
+$mp4Files2 = Get-NewMp4 $mp4Files.FullName
+if ($mp4Files2) {
     Pass "Second MP4 produit : $($mp4Files2.Name)"
     $probe2Json = & $FfprobePath -v quiet -print_format json -show_streams -show_format $mp4Files2.FullName 2>&1
     try {

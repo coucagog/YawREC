@@ -1,6 +1,6 @@
-# Vérifie les patterns dans yawrec.log et retourne un résumé
+﻿# Vérifie les patterns dans yawrec.log et retourne un résumé
 param([int]$TailLines = 50)
-$log = Get-Content "$env:TEMP\yawrec.log" -Tail $TailLines -ErrorAction SilentlyContinue
+$log = Get-Content "$env:TEMP\yawrec.log" -Encoding UTF8 -Tail $TailLines -ErrorAction SilentlyContinue
 if (-not $log) { Write-Host "Pas de log trouvé"; return }
 
 Write-Host "=== yawrec.log (dernières $TailLines lignes) ==="
