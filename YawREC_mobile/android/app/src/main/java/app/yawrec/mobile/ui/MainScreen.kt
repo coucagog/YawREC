@@ -383,12 +383,13 @@ fun TileRow(
             onClick = onToggleMic,
         )
 
-        // Caméra — toggleable (PiP compositing: future sprint)
+        // Caméra — grisée tant que l'incrustation (PiP) n'est pas développée :
+        // le bouton basculait un drapeau sans effet sur l'enregistrement.
         Tile(
-            label   = "Caméra",
+            label   = "Caméra · bientôt",
             icon    = Icons.Outlined.Videocam,
             active  = cameraEnabled,
-            enabled = true,
+            enabled = false,
             onClick = onToggleCamera,
         )
     }
