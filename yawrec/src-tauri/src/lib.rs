@@ -3,7 +3,7 @@
 // Point d'entrée Tauri.
 //
 // Initialisation :
-//   - plugins (dialog, notification, global-shortcut)
+//   - plugins (single-instance, dialog, notification, global-shortcut)
 //   - état partagé (RecorderState dans un Mutex)
 //   - probe encodeur HW (E2)
 //   - tick loop 250 ms (C3)
@@ -72,6 +72,16 @@ pub fn run() {
     );
 
     tauri::Builder::default()
+        // ----------------------------------------------------
+        // Instance unique — doit être le premier plugin. Une 2e ouverture
+        // (double-clic, raccourci du menu Démarrer) ramène la fenêtre
+        // existante ; sans ça elle démarrait en tâche de fond, sans
+        // raccourcis globaux ni serveur WebSocket (déjà pris par la 1re).
+        // ----------------------------------------------------
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            log::info!("2e instance lancée — fenêtre existante ramenée");
+            show_main_window(app);
+        }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         // ----------------------------------------------------
@@ -241,6 +251,15 @@ pub fn run() {
         });
 }
 
+/// Affiche la fenêtre principale au premier plan (tray, 2e instance).
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+    }
+}
+
 // ============================================================
 // F4 — Tray icon
 // ============================================================
@@ -280,13 +299,7 @@ fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
         .show_menu_on_left_click(false)
         .tooltip("YawREC")
         .on_menu_event(|app, event| match event.id.as_ref() {
-            "tray-show" => {
-                if let Some(w) = app.get_webview_window("main") {
-                    let _ = w.show();
-                    let _ = w.set_focus();
-                    let _ = w.unminimize();
-                }
-            }
+            "tray-show" => show_main_window(app),
             "tray-toggle" => {
                 let app = app.clone();
                 tauri::async_runtime::spawn(async move {
@@ -307,11 +320,7 @@ fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
                 ..
             } = event
             {
-                if let Some(w) = tray.app_handle().get_webview_window("main") {
-                    let _ = w.show();
-                    let _ = w.set_focus();
-                    let _ = w.unminimize();
-                }
+                show_main_window(tray.app_handle());
             }
         })
         .build(app)?;
