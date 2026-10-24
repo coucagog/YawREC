@@ -62,7 +62,18 @@ jobs:
         run: npx tauri icon docs/icon-source.svg
 
       - name: Build release executable
-        run: npx tauri build --no-bundle -- --locked
+        # bash et non pwsh : PowerShell avale le `--` en appelant npx.ps1,
+        # et `--locked` arrive alors à la CLI Tauri au lieu de cargo.
+        # En cas d'échec, la fin du log est publiée en annotation (lisible
+        # sans être connecté, contrairement aux logs du job).
+        shell: bash
+        run: |
+          set -o pipefail
+          if ! npx tauri build --no-bundle -- --locked 2>&1 | tee "$RUNNER_TEMP/build.log"; then
+            msg=$(tail -n 60 "$RUNNER_TEMP/build.log" | sed -e 's/%/%25/g' | sed -e ':a;N;$!ba;s/\n/%0A/g')
+            echo "::error title=tauri build::$msg"
+            exit 1
+          fi
 
       - name: Collect portable build
         shell: pwsh
