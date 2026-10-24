@@ -45,10 +45,26 @@ try {
     Check-Tool "node"  "winget install OpenJS.NodeJS.LTS"
     Check-Tool "npm"   "fourni avec node"
 
+    # Une instance en cours verrouille yawrec.exe et les DLL FFmpeg de
+    # target\release : la copie des DLL et l'édition de liens échoueraient.
+    $running = Get-Process -Name "yawrec*" -ErrorAction SilentlyContinue
+    if ($running) {
+        Write-Host "✗ YawREC est en cours d'exécution (PID $($running.Id -join ', '))" -ForegroundColor Red
+        Write-Host "  → Le quitter (icône de la barre des tâches → Quitter) puis relancer le build" -ForegroundColor Yellow
+        exit 1
+    }
+
     # CLI Tauri : `cargo tauri` si installé, sinon celle du package.json
     # (npx, disponible après npm install). npx.cmd plutôt que npx : le
     # wrapper npx.ps1 de PowerShell avale certains arguments.
-    if (cargo tauri --version 2>$null) {
+    # Sous Windows PowerShell 5.1 avec ErrorActionPreference=Stop, la stderr
+    # d'une commande native (« no such command: tauri ») devient une erreur
+    # fatale même redirigée : on teste le code de sortie en mode Continue.
+    $ErrorActionPreference = "Continue"
+    cargo tauri --version *> $null
+    $hasCargoTauri = ($LASTEXITCODE -eq 0)
+    $ErrorActionPreference = "Stop"
+    if ($hasCargoTauri) {
         $tauriExe = "cargo"; $tauriArgs = @("tauri")
         Write-Host "✓ tauri CLI (cargo tauri)" -ForegroundColor Green
     } else {

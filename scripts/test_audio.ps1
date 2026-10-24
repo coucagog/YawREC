@@ -31,6 +31,41 @@ if (-not $FfprobePath -or -not (Test-Path $FfprobePath)) {
 # dossier de sortie ne doit pas faire passer le test.
 $testStart = Get-Date
 
+# Horodatages (s) des paquets d'un flux ("v:0" / "a:0"), triés.
+function Get-PacketTimes($File, $Stream) {
+    & $FfprobePath -v error -select_streams $Stream -show_entries packet=pts_time -of csv=p=0 $File |
+        Where-Object { $_ -match '^[0-9.]+' } |
+        ForEach-Object { [double](($_ -split ',')[0]) } |
+        Sort-Object
+}
+
+# Synchro et régularité d'un MP4, mesurées sur les paquets : en VFR, la
+# « duration » des flux rapportée par ffprobe ne reflète pas l'étendue réelle.
+function Test-Timing($File, $Label) {
+    $vt = @(Get-PacketTimes $File "v:0")
+    $at = @(Get-PacketTimes $File "a:0")
+    if ($vt.Count -lt 2 -or $at.Count -lt 2) {
+        Fail "Horodatages $Label" "vidéo=$($vt.Count) paquets, audio=$($at.Count) paquets"
+        return
+    }
+    # Fin des deux flux à moins de 300 ms l'une de l'autre.
+    $endDiff = [math]::Round([math]::Abs($vt[-1] - $at[-1]), 3)
+    if ($endDiff -lt 0.3) { Pass "Fins A/V alignées $Label (écart ${endDiff}s)" }
+    else { Fail "Fins A/V alignées $Label" "vidéo finit à $($vt[-1])s, audio à $($at[-1])s" }
+
+    # Aucun gel d'image : la dernière frame est répétée à la cadence demandée,
+    # un écart > 250 ms entre deux frames signale une boucle de capture bloquée.
+    $maxGap = 0.0; $at_s = 0.0
+    for ($i = 1; $i -lt $vt.Count; $i++) {
+        $gap = $vt[$i] - $vt[$i - 1]
+        if ($gap -gt $maxGap) { $maxGap = $gap; $at_s = $vt[$i - 1] }
+    }
+    $maxGapMs = [math]::Round($maxGap * 1000)
+    $fps = [math]::Round(($vt.Count - 1) / ($vt[-1] - $vt[0]), 1)
+    if ($maxGap -lt 0.25) { Pass "Pas de gel d'image $Label (max ${maxGapMs} ms, ${fps} fps)" }
+    else { Fail "Pas de gel d'image $Label" "gel de ${maxGapMs} ms à ${at_s}s, ${fps} fps moyen (voir 'Vidéo · gel' dans yawrec.log)" }
+}
+
 # Renvoie le MP4 le plus récent créé pendant le test (hors $Exclude).
 function Get-NewMp4($Exclude) {
     Get-ChildItem -Path $OutputDir -Filter "*.mp4" -ErrorAction SilentlyContinue |
@@ -103,12 +138,7 @@ if ($mp4Files) {
         if ($audioStream -and $audioStream.codec_name -eq "aac") { Pass "Flux audio AAC présent" }
         else { Fail "Flux audio AAC présent" "Stream: $($audioStream.codec_name)" }
 
-        # Vérifier que l'audio et la vidéo ont des durées proches (< 500ms d'écart)
-        $vDur = [double]$videoStream.duration
-        $aDur = [double]$audioStream.duration
-        $avDiff = [math]::Abs($vDur - $aDur)
-        if ($avDiff -lt 0.5) { Pass "Sync A/V correcte (écart ${avDiff}s)" }
-        else { Fail "Sync A/V correcte" "Écart A/V : ${avDiff}s (vidéo=${vDur}s, audio=${aDur}s)" }
+        Test-Timing $mp4Files.FullName "(MP4 #1)"
 
     } catch {
         Fail "Parse ffprobe JSON" $_.Exception.Message
@@ -147,6 +177,7 @@ if ($mp4Files2) {
         # 5s rec + 5s rec = 10s (sans les 3s de pause)
         if ($dur2 -ge 8 -and $dur2 -le 14) { Pass "Durée avec pause correcte (~10s effectif, obtenu ${dur2}s)" }
         else { Fail "Durée avec pause correcte" "Attendu ~10s effectif, obtenu ${dur2}s" }
+        Test-Timing $mp4Files2.FullName "(MP4 #2, pause)"
     } catch {
         Fail "Parse ffprobe second MP4" $_.Exception.Message
     }
