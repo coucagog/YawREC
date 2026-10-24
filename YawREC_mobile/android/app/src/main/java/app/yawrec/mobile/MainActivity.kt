@@ -177,9 +177,8 @@ class MainActivity : ComponentActivity() {
 
     private val qrScanLauncher = registerForActivityResult(ScanContract()) { result ->
         val raw = result.contents ?: return@registerForActivityResult
-        // Contenu attendu : "yawrec://192.168.1.10:9799"
-        val ip = raw.removePrefix("yawrec://").substringBefore(":").trim()
-        if (ip.isNotEmpty()) remoteViewModel.fillIpAndConnect(ip)
+        // Contenu attendu : "yawrec://192.168.1.10:9799?token=ABCDE23456"
+        parsePairingUri(raw)?.let(remoteViewModel::connectWithPairing)
     }
 
     fun launchQrScanner() {

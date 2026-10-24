@@ -1,5 +1,6 @@
 package app.yawrec.mobile.recording
 
+import android.annotation.SuppressLint
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioPlaybackCaptureConfiguration
@@ -14,18 +15,26 @@ import java.nio.ByteOrder
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.sqrt
 
+/**
+ * Capture son système (AudioPlaybackCapture) + micro optionnel, encode en AAC.
+ *
+ * Temps : la piste est datée sur la même horloge que la vidéo (CLOCK_MONOTONIC,
+ * pauses retirées via [PauseClock]). Le PTS avance au nombre d'échantillons
+ * encodés ; si le son système ne livre rien pendant un moment, on comble avec
+ * du silence pour que l'audio ne prenne pas de retard sur la vidéo.
+ */
 class AudioCapturer(
     private val projection: MediaProjection,
     private val muxer: MediaMuxerWrapper,
+    private val clock: PauseClock,
 ) {
     private val stopped = AtomicBoolean(false)
-    private val paused  = AtomicBoolean(false)
 
     // System audio (AudioPlaybackCapture)
     private var sysRecord: AudioRecord? = null
-    // Microphone (optional, toggled at runtime)
-    @Volatile private var micRecord: AudioRecord? = null
-    private val micActive = AtomicBoolean(false)
+    // Microphone : ouvert/fermé par le thread de capture lui-même, selon ce
+    // flag, pour ne jamais libérer un AudioRecord en cours de lecture.
+    private val micWanted = AtomicBoolean(false)
 
     private var encoder: MediaCodec? = null
     private var audioTrackIndex = -1
@@ -39,6 +48,8 @@ class AudioCapturer(
         private const val BIT_RATE      = 128_000
         // 1024 samples/channel × 2 ch → one AAC-LC frame at 44100 Hz ≈ 23 ms
         private const val FRAME_SHORTS  = 1024 * CHANNEL_COUNT
+        /** Retard au-delà duquel on comble l'absence de son système par du silence. */
+        private const val GAP_FILL_THRESHOLD_US = 80_000L
     }
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
@@ -61,40 +72,18 @@ class AudioCapturer(
         captureThread = Thread(::captureLoop, "yawrec-audio-encode").also { it.start() }
     }
 
-    fun pause()  = paused.set(true)
-    fun resume() = paused.set(false)
-
-    /**
-     * Toggle microphone mixing at runtime.
-     * Safe to call while captureLoop is running.
-     */
-    fun setMicEnabled(enabled: Boolean) {
-        if (enabled) {
-            if (micRecord == null) {
-                val minBuf = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_MASK, PCM_ENCODING)
-                micRecord = AudioRecord(
-                    MediaRecorder.AudioSource.MIC,
-                    SAMPLE_RATE, CHANNEL_MASK, PCM_ENCODING,
-                    maxOf(minBuf, FRAME_SHORTS * 2 * 4)
-                ).also { if (it.state == AudioRecord.STATE_INITIALIZED) it.startRecording() }
-            }
-            micActive.set(true)
-        } else {
-            micActive.set(false)       // captureLoop stops reading mic on next iteration
-            val r = micRecord
-            micRecord = null           // null before release so captureLoop safe-call returns
-            r?.apply { stop(); release() }
-        }
-    }
+    /** Active/coupe le mixage du micro (appliqué par le thread de capture). */
+    fun setMicEnabled(enabled: Boolean) = micWanted.set(enabled)
 
     fun stop() {
-        stopped.set(true)
+        if (!stopped.compareAndSet(false, true)) return
         captureThread?.join(5_000)
         sysRecord?.apply { stop(); release() }
         sysRecord = null
-        micRecord?.apply { stop(); release() }
-        micRecord = null
-        encoder?.apply { stop(); release() }
+        encoder?.apply {
+            try { stop() } catch (_: Exception) {}
+            release()
+        }
         encoder = null
     }
 
@@ -106,74 +95,123 @@ class AudioCapturer(
         val outInfo  = MediaCodec.BufferInfo()
         val sysBuf   = ShortArray(FRAME_SHORTS)
         val micBuf   = ShortArray(FRAME_SHORTS)
-        var ptsUs    = 0L
-        var eosSent  = false
+        var micRec: AudioRecord? = null
 
-        loop@ while (true) {
+        // Temps média (µs) correspondant au premier échantillon encodé.
+        var startMediaUs = -1L
+        // Frames (par canal) envoyées à l'encodeur.
+        var framesFed = 0L
+        var eosSent = false
 
-            // Pause: drain ring buffers without encoding
-            while (paused.get() && !stopped.get()) {
-                sysRec.read(sysBuf, 0, sysBuf.size, AudioRecord.READ_NON_BLOCKING)
-                micRecord?.read(micBuf, 0, micBuf.size, AudioRecord.READ_NON_BLOCKING)
-                Thread.sleep(10)
-            }
+        fun ptsUs(): Long = startMediaUs + framesFed * 1_000_000L / SAMPLE_RATE
 
-            // ── Feed encoder input ────────────────────────────────────────────
-            if (!eosSent) {
-                val inputIdx = codec.dequeueInputBuffer(5_000L)
-                if (inputIdx >= 0) {
-                    val inputBuf = codec.getInputBuffer(inputIdx)!!
-                    inputBuf.clear()
+        try {
+            loop@ while (true) {
+                // ── Micro : ouverture / fermeture sur ce thread ───────────────
+                if (micWanted.get() && micRec == null) micRec = openMic()
+                if (!micWanted.get() && micRec != null) {
+                    micRec.apply { stop(); release() }
+                    micRec = null
+                }
 
+                // ── Feed encoder input ────────────────────────────────────────
+                if (!eosSent) {
+                    val sysRead = sysRec.read(sysBuf, 0, sysBuf.size, AudioRecord.READ_NON_BLOCKING)
+                    val nowMedia = clock.toMediaUs(PauseClock.nowUs())
+
+                    var count = 0
                     if (stopped.get()) {
-                        codec.queueInputBuffer(inputIdx, 0, 0, ptsUs, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
-                        eosSent = true
+                        // fin : on enverra l'EOS
+                    } else if (nowMedia == null) {
+                        // En pause : on vide les buffers sans encoder.
+                        micRec?.read(micBuf, 0, micBuf.size, AudioRecord.READ_NON_BLOCKING)
+                        Thread.sleep(10)
+                    } else if (sysRead > 0) {
+                        count = sysRead
+                        if (startMediaUs < 0) {
+                            startMediaUs = nowMedia - (sysRead / CHANNEL_COUNT) * 1_000_000L / SAMPLE_RATE
+                        }
+                    } else if (startMediaUs >= 0 && nowMedia - ptsUs() > GAP_FILL_THRESHOLD_US) {
+                        // Pas de son système depuis un moment : silence.
+                        sysBuf.fill(0)
+                        count = sysBuf.size
                     } else {
-                        val sysRead = sysRec.read(sysBuf, 0, sysBuf.size, AudioRecord.READ_NON_BLOCKING)
-                        if (sysRead > 0) {
-                            // Optionally mix microphone
-                            if (micActive.get()) {
-                                val micRead = micRecord?.read(micBuf, 0, sysRead, AudioRecord.READ_NON_BLOCKING) ?: 0
-                                mixInPlace(sysBuf, micBuf, sysRead, micRead)
-                            }
-                            inputBuf.order(ByteOrder.nativeOrder())
-                            inputBuf.asShortBuffer().put(sysBuf, 0, sysRead)
-                            codec.queueInputBuffer(inputIdx, 0, sysRead * 2, ptsUs, 0)
-                            ptsUs += sysRead.toLong() * 1_000_000L / (SAMPLE_RATE.toLong() * CHANNEL_COUNT)
-                            RecordingState.updateVuLevel(rms(sysBuf, sysRead))
-                        } else {
-                            codec.queueInputBuffer(inputIdx, 0, 0, ptsUs, 0)
-                            Thread.sleep(2)
-                        }
+                        Thread.sleep(2)
                     }
-                }
-            }
 
-            // ── Drain encoder output ──────────────────────────────────────────
-            var outputIdx = codec.dequeueOutputBuffer(outInfo, 0L)
-            while (outputIdx != MediaCodec.INFO_TRY_AGAIN_LATER) {
-                when {
-                    outputIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
-                        audioTrackIndex = muxer.addTrack(codec.outputFormat)
-                    }
-                    outputIdx >= 0 -> {
-                        val isConfig = outInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0
-                        if (!isConfig && audioTrackIndex >= 0 && outInfo.size > 0) {
-                            codec.getOutputBuffer(outputIdx)?.let { buf ->
-                                muxer.writeSampleData(audioTrackIndex, buf, outInfo)
+                    if (stopped.get() || count > 0) {
+                        val inputIdx = codec.dequeueInputBuffer(10_000L)
+                        if (inputIdx >= 0) {
+                            if (stopped.get()) {
+                                codec.queueInputBuffer(inputIdx, 0, 0, maxOf(ptsUs(), 0L), MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                                eosSent = true
+                            } else {
+                                // Micro lu en bloquant sur la même durée que le son
+                                // système : les deux flux restent en phase (avant,
+                                // une lecture non bloquante mixait des bouts de micro).
+                                micRec?.let { mic ->
+                                    val micRead = mic.read(micBuf, 0, count, AudioRecord.READ_BLOCKING)
+                                    mixInPlace(sysBuf, micBuf, count, micRead)
+                                }
+                                val inputBuf = codec.getInputBuffer(inputIdx)!!
+                                inputBuf.clear()
+                                inputBuf.order(ByteOrder.nativeOrder())
+                                inputBuf.asShortBuffer().put(sysBuf, 0, count)
+                                codec.queueInputBuffer(inputIdx, 0, count * 2, ptsUs(), 0)
+                                framesFed += count / CHANNEL_COUNT
+                                RecordingState.updateVuLevel(rms(sysBuf, count))
                             }
                         }
-                        codec.releaseOutputBuffer(outputIdx, false)
-                        if (outInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) break@loop
                     }
                 }
-                outputIdx = codec.dequeueOutputBuffer(outInfo, 0L)
+
+                // ── Drain encoder output ──────────────────────────────────────
+                var outputIdx = codec.dequeueOutputBuffer(outInfo, if (eosSent) 10_000L else 0L)
+                while (outputIdx != MediaCodec.INFO_TRY_AGAIN_LATER) {
+                    when {
+                        outputIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                            audioTrackIndex = muxer.addTrack(codec.outputFormat)
+                        }
+                        outputIdx >= 0 -> {
+                            val isConfig = outInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0
+                            if (!isConfig && audioTrackIndex >= 0 && outInfo.size > 0) {
+                                codec.getOutputBuffer(outputIdx)?.let { buf ->
+                                    muxer.writeSampleData(audioTrackIndex, buf, outInfo)
+                                }
+                            }
+                            codec.releaseOutputBuffer(outputIdx, false)
+                            if (outInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) break@loop
+                        }
+                    }
+                    outputIdx = codec.dequeueOutputBuffer(outInfo, 0L)
+                }
             }
+        } catch (e: IllegalStateException) {
+            // Encodeur / AudioRecord libéré pendant un arrêt forcé.
+        } finally {
+            micRec?.apply { try { stop() } catch (_: Exception) {}; release() }
         }
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
+    @SuppressLint("MissingPermission") // RECORD_AUDIO vérifiée avant le démarrage du service
+    private fun openMic(): AudioRecord? {
+        val minBuf = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_MASK, PCM_ENCODING)
+        val rec = AudioRecord(
+            MediaRecorder.AudioSource.MIC,
+            SAMPLE_RATE, CHANNEL_MASK, PCM_ENCODING,
+            maxOf(minBuf, FRAME_SHORTS * 2 * 4)
+        )
+        if (rec.state != AudioRecord.STATE_INITIALIZED) {
+            rec.release()
+            return null
+        }
+        rec.startRecording()
+        return rec
+    }
+
+    @SuppressLint("MissingPermission")
     private fun buildSysRecord(): AudioRecord {
         val captureConfig = AudioPlaybackCaptureConfiguration.Builder(projection)
             .addMatchingUsage(AudioAttributes.USAGE_MEDIA)

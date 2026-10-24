@@ -4,7 +4,6 @@ import android.os.SystemClock
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import java.io.File
 
 enum class RecordingPhase { Idle, Recording, Paused }
 
@@ -64,9 +63,9 @@ object RecordingState {
     }
 
     // called every 250 ms by the timer coroutine, only when Recording
-    fun tick(outputFile: File) {
+    fun tick(fileSizeBytes: Long) {
         val now = SystemClock.elapsedRealtime()
         _elapsedMs.value    = now - startElapsedMs - pausedTotalMs
-        _fileSizeBytes.value = outputFile.length()
+        _fileSizeBytes.value = fileSizeBytes
     }
 }

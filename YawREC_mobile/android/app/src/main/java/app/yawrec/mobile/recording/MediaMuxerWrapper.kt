@@ -14,15 +14,18 @@ import kotlin.concurrent.withLock
  * threads; the second call triggers muxer.start() and unblocks any writeSampleData()
  * already waiting on the condition.
  */
-class MediaMuxerWrapper(outputPath: String, private val expectedTracks: Int) {
+class MediaMuxerWrapper(private val muxer: MediaMuxer, private val expectedTracks: Int) {
 
-    private val muxer    = MediaMuxer(outputPath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
     private val lock     = ReentrantLock()
     private val ready    = lock.newCondition()
 
     private var added    = 0
     private var started  = false
     private var released = false
+
+    /** true si au moins un échantillon a pu être écrit (fichier exploitable). */
+    @Volatile var hasData = false
+        private set
 
     fun addTrack(format: MediaFormat): Int = lock.withLock {
         val idx = muxer.addTrack(format)
@@ -44,6 +47,7 @@ class MediaMuxerWrapper(outputPath: String, private val expectedTracks: Int) {
             }
             if (started && !released) {
                 muxer.writeSampleData(trackIndex, buffer, info)
+                hasData = true
             }
         }
     }

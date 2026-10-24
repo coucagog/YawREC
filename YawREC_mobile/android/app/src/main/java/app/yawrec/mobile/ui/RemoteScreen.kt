@@ -34,9 +34,14 @@ fun RemoteScreen(viewModel: RemoteViewModel, onScanQr: () -> Unit = {}) {
     val connState   by viewModel.connState.collectAsStateWithLifecycle()
     val status      by viewModel.desktopStatus.collectAsStateWithLifecycle()
     val stoppedPath by viewModel.stoppedPath.collectAsStateWithLifecycle()
+    val token       by viewModel.token.collectAsStateWithLifecycle()
+    val lastError   by viewModel.lastError.collectAsStateWithLifecycle()
 
     val isConnected  = connState is ConnectionState.Connected
     val isConnecting = connState is ConnectionState.Connecting
+    val isRetrying   = (connState as? ConnectionState.Failed)?.retrying == true
+    // Connecté ou en reconnexion automatique : le bouton coupe.
+    val canDisconnect = isConnected || isRetrying
 
     Column(
         Modifier
@@ -101,10 +106,10 @@ fun RemoteScreen(viewModel: RemoteViewModel, onScanQr: () -> Unit = {}) {
                 )
 
                 Button(
-                    onClick = if (isConnected) viewModel::disconnect else viewModel::connect,
+                    onClick = if (canDisconnect) viewModel::disconnect else viewModel::connect,
                     shape = RoundedCornerShape(12.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = if (isConnected) Rec500 else PrimaryPurple,
+                        containerColor = if (canDisconnect) Rec500 else PrimaryPurple,
                     ),
                     modifier = Modifier.height(52.dp),
                 ) {
@@ -113,10 +118,36 @@ fun RemoteScreen(viewModel: RemoteViewModel, onScanQr: () -> Unit = {}) {
                             Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp,
                         )
                     } else {
-                        Text(if (isConnected) "Couper" else "Connecter", fontWeight = FontWeight.Medium)
+                        Text(if (canDisconnect) "Couper" else "Connecter", fontWeight = FontWeight.Medium)
                     }
                 }
             }
+
+            // Code d'appairage (affiché sous le QR code du bureau)
+            OutlinedTextField(
+                value = token,
+                onValueChange = viewModel::onTokenChanged,
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("Code d'appairage", fontSize = 12.sp) },
+                placeholder = { Text("ex. K7QM2XWR9A", color = Muted, fontSize = 14.sp) },
+                singleLine = true,
+                enabled = !isConnected && !isConnecting,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedTextColor      = OnSurface,
+                    unfocusedTextColor    = OnSurface,
+                    focusedContainerColor = SurfaceVariant,
+                    unfocusedContainerColor = SurfaceVariant,
+                    disabledContainerColor = SurfaceVariant,
+                    disabledTextColor     = OnSurface,
+                    focusedBorderColor    = PrimaryPurple,
+                    unfocusedBorderColor  = Divider,
+                    disabledBorderColor   = Divider,
+                    focusedLabelColor     = Muted,
+                    unfocusedLabelColor   = Muted,
+                ),
+                shape = RoundedCornerShape(12.dp),
+            )
 
             // Badge d'état
             when (val s = connState) {
@@ -138,6 +169,22 @@ fun RemoteScreen(viewModel: RemoteViewModel, onScanQr: () -> Unit = {}) {
                     else viewModel.send("resume")
                 },
             )
+        }
+
+        // Erreur renvoyée par le bureau (ex. « Aucune fenêtre sélectionnée »)
+        lastError?.let { msg ->
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Rec500.copy(alpha = 0.18f))
+                    .clickable(onClick = viewModel::dismissError)
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(msg, fontSize = 12.sp, color = Color.White, modifier = Modifier.weight(1f))
+                Text("✕", fontSize = 12.sp, color = Muted)
+            }
         }
 
         // Dernier fichier enregistré
