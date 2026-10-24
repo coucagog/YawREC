@@ -181,7 +181,7 @@ pub mod windows_impl {
     use windows::{
         core::Interface,
         Win32::{
-            Foundation::HMODULE,
+            Foundation::{GENERIC_ALL, HMODULE},
             Graphics::{
                 Direct3D::D3D_DRIVER_TYPE_UNKNOWN,
                 Direct3D11::{
@@ -198,12 +198,33 @@ pub mod windows_impl {
                     DXGI_OUTDUPL_FRAME_INFO, DXGI_OUTDUPL_POINTER_SHAPE_INFO,
                 },
             },
+            System::StationsAndDesktops::{
+                CloseDesktop, OpenInputDesktop, SetThreadDesktop, DESKTOP_ACCESS_FLAGS,
+                DESKTOP_CONTROL_FLAGS,
+            },
         },
     };
 
     /// Durée max pendant laquelle on tente de récupérer une duplication perdue
     /// (bureau sécurisé UAC, écran verrouillé…) avant d'abandonner.
     const ACCESS_LOST_GIVE_UP: Duration = Duration::from_secs(30);
+
+    /// Rattache le thread courant au bureau de saisie actif, comme le fait
+    /// l'exemple Microsoft de Desktop Duplication avant chaque DuplicateOutput.
+    /// Pendant une invite UAC ou l'écran Ctrl+Alt+Suppr, le bureau actif est
+    /// le bureau sécurisé, qu'une app non élevée ne peut pas ouvrir : Err,
+    /// il faut attendre. Sans ce contrôle, DuplicateOutput réussissait pendant
+    /// l'invite UAC et donnait une duplication du mauvais bureau (boucle
+    /// ACCESS_LOST puis image noire jusqu'à la fin de l'enregistrement).
+    fn attach_to_input_desktop() -> windows::core::Result<()> {
+        unsafe {
+            let desk = OpenInputDesktop(DESKTOP_CONTROL_FLAGS(0), false, DESKTOP_ACCESS_FLAGS(GENERIC_ALL.0))?;
+            let attached = SetThreadDesktop(desk);
+            // Le thread garde son rattachement ; le handle n'est plus utile.
+            let _ = CloseDesktop(desk);
+            attached
+        }
+    }
 
     // --------------------------------------------------------
     // Helpers internes
@@ -334,6 +355,9 @@ pub mod windows_impl {
         acquire_timeout_ms: u32,
         /// Instant de la première perte d'accès non encore récupérée.
         access_lost_since: Option<Instant>,
+        /// Dernière récupération réussie : une nouvelle perte juste après
+        /// signale une boucle (perte/récupération en rafale), qu'on ralentit.
+        recovered_at: Option<Instant>,
         pointer: PointerState,
         stopped: bool,
     }
@@ -357,6 +381,7 @@ pub mod windows_impl {
                 started_at: None,
                 acquire_timeout_ms: 100,
                 access_lost_since: None,
+                recovered_at: None,
                 pointer: PointerState::default(),
                 stopped: false,
             })
@@ -379,8 +404,7 @@ pub mod windows_impl {
             };
             let dup = unsafe {
                 output1.DuplicateOutput(device).map_err(|e| ScreenError::Init(format!(
-                    "DuplicateOutput ({}×{}) : {} [RDP/VM non supporté ?]",
-                    self.width, self.height, e
+                    "DuplicateOutput ({}×{}) : {}", self.width, self.height, e
                 )))?
             };
             self.duplication = Some(dup);
@@ -391,6 +415,18 @@ pub mod windows_impl {
         fn try_recover(&mut self) -> Result<bool, ScreenError> {
             let since = *self.access_lost_since.get_or_insert_with(Instant::now);
             self.duplication = None;
+            if let Err(e) = attach_to_input_desktop() {
+                // Bureau sécurisé encore affiché : on garde la dernière image.
+                if since.elapsed() >= ACCESS_LOST_GIVE_UP {
+                    return Err(ScreenError::Capture(format!(
+                        "Accès à l'écran perdu depuis {}s : bureau de saisie inaccessible ({e})",
+                        ACCESS_LOST_GIVE_UP.as_secs()
+                    )));
+                }
+                log::debug!("DXGI · bureau sécurisé actif, attente : {e}");
+                std::thread::sleep(Duration::from_millis(200));
+                return Ok(false);
+            }
             // La résolution a pu changer : relire la géométrie de l'écran.
             if let Ok(found) = find_output(self.screen_id) {
                 self.origin = (found.left, found.top);
@@ -401,6 +437,7 @@ pub mod windows_impl {
                 Ok(()) => {
                     log::info!("DXGI · duplication récupérée après {:?}", since.elapsed());
                     self.access_lost_since = None;
+                    self.recovered_at = Some(Instant::now());
                     Ok(true)
                 }
                 Err(e) if since.elapsed() < ACCESS_LOST_GIVE_UP => {
@@ -513,7 +550,10 @@ pub mod windows_impl {
             self.origin = (found.left, found.top);
             self.width = found.width;
             self.height = found.height;
-            self.duplicate()?;
+            if let Err(e) = attach_to_input_desktop() {
+                log::debug!("DXGI · rattachement au bureau de saisie : {e}");
+            }
+            self.duplicate().map_err(|e| ScreenError::Init(format!("{e} [session RDP ou VM non supportée ?]")))?;
             self.started_at = Some(Instant::now());
             self.stopped = false;
 
@@ -555,7 +595,13 @@ pub mod windows_impl {
                 Ok(()) => {}
                 Err(e) if e.code() == DXGI_ERROR_WAIT_TIMEOUT => return Ok(None),
                 Err(e) if e.code() == DXGI_ERROR_ACCESS_LOST => {
-                    log::warn!("DXGI · accès perdu, tentative de récupération");
+                    if self.recovered_at.is_some_and(|t| t.elapsed() < Duration::from_secs(1)) {
+                        // Perdue juste après récupération : on ralentit la boucle.
+                        log::debug!("DXGI · accès reperdu juste après récupération");
+                        std::thread::sleep(Duration::from_millis(100));
+                    } else {
+                        log::warn!("DXGI · accès perdu, tentative de récupération");
+                    }
                     self.try_recover()?;
                     return Ok(None);
                 }
