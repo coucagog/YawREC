@@ -99,6 +99,34 @@ pub fn run_worker(
 // Helpers communs
 // ============================================================
 
+/// Choisit, parmi les modes d'une webcam `(largeur, hauteur, fps)`, celui
+/// à utiliser pour une vignette `dst_w`×`dst_h` : même ratio que la
+/// vignette (à 2 % près) et au moins 24 fps, la plus petite résolution
+/// couvrant la vignette (décodage moins coûteux), à défaut la plus grande ;
+/// à résolution égale, le fps le plus élevé. None si aucun mode ne convient
+/// (le recadrage « cover » prend alors le relais).
+///
+/// Certaines webcams (ex. Logitech C270) livrent un mode 4:3 « haute
+/// fréquence » qui n'est pas leur image native ; un mode au bon ratio évite
+/// à la fois la déformation et le recadrage.
+pub fn pick_pip_mode(modes: &[(u32, u32, u32)], dst_w: u32, dst_h: u32) -> Option<usize> {
+    if dst_w == 0 || dst_h == 0 {
+        return None;
+    }
+    let target = dst_w as f64 / dst_h as f64;
+    let candidates = modes.iter().enumerate().filter(|(_, &(w, h, fps))| {
+        h > 0 && fps >= 24 && ((w as f64 / h as f64) / target - 1.0).abs() < 0.02
+    });
+    // Clé de tri : couvre la vignette d'abord, puis petite largeur (ou grande
+    // si aucune ne couvre), puis fps élevé.
+    candidates
+        .min_by_key(|(_, &(w, _, fps))| {
+            let covers = w >= dst_w;
+            (!covers, if covers { w as i64 } else { -(w as i64) }, std::cmp::Reverse(fps))
+        })
+        .map(|(i, _)| i)
+}
+
 /// Convertit un buffer RGB packé (3 bytes/pixel) vers BGRA (4 bytes/pixel)
 /// en redimensionnant via nearest-neighbor, en mode "cover" : la source est
 /// recadrée au centre pour avoir le ratio de la destination, ce qui évite
@@ -162,7 +190,7 @@ mod windows_impl {
     use nokhwa::{
         pixel_format::RgbFormat,
         query,
-        utils::{ApiBackend, CameraIndex, RequestedFormat, RequestedFormatType},
+        utils::{ApiBackend, CameraFormat, CameraIndex, RequestedFormat, RequestedFormatType},
         Camera,
     };
 
@@ -203,21 +231,37 @@ mod windows_impl {
             }
         };
 
+        // Mode natif au ratio de la vignette, si la caméra en propose un.
+        match camera.compatible_camera_formats() {
+            Ok(formats) => {
+                let modes: Vec<(u32, u32, u32)> = formats.iter()
+                    .map(|f| (f.resolution().width(), f.resolution().height(), f.frame_rate()))
+                    .collect();
+                if let Some(i) = pick_pip_mode(&modes, layout.width, layout.height) {
+                    let wanted: CameraFormat = formats[i];
+                    let request = RequestedFormat::new::<RgbFormat>(RequestedFormatType::Exact(wanted));
+                    if let Err(e) = camera.set_camera_requset(request) {
+                        log::debug!("Webcam · mode {wanted} refusé : {e}");
+                    }
+                }
+            }
+            Err(e) => log::debug!("Webcam · liste des modes indisponible : {e}"),
+        }
+
         if let Err(e) = camera.open_stream() {
             log::warn!("Webcam désactivée : open_stream a échoué ({e})");
             return;
         }
 
-        let resolution = camera.resolution();
         log::info!(
-            "Webcam · ouverte ({}×{}) → PiP {}×{}",
-            resolution.width(), resolution.height(),
-            layout.width, layout.height,
+            "Webcam · ouverte ({}) → PiP {}×{}",
+            camera.camera_format(), layout.width, layout.height,
         );
 
         // 2. Boucle de capture
         let started_at = Instant::now();
         let mut consecutive_errors = 0u32;
+        let mut first_frame = true;
 
         while !stop_flag.load(Ordering::Relaxed) {
             let buffer = match camera.frame() {
@@ -245,6 +289,10 @@ mod windows_impl {
 
             let src_w = rgb_image.width();
             let src_h = rgb_image.height();
+            if first_frame {
+                first_frame = false;
+                log::info!("Webcam · 1re image décodée : {src_w}×{src_h}");
+            }
             let rgb_data: &[u8] = rgb_image.as_raw();
 
             // 4. RGB → BGRA + resize vers dimensions PiP
@@ -284,6 +332,20 @@ mod windows_impl {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pick_pip_mode_prefere_le_ratio_de_la_vignette() {
+        // Modes type Logitech C270.
+        let modes = [(640, 480, 30), (1280, 960, 30), (1280, 720, 30), (640, 360, 30), (1920, 1080, 15)];
+        // Vignette 384×216 : le plus petit 16:9 qui la couvre, à ≥ 24 fps.
+        assert_eq!(pick_pip_mode(&modes, 384, 216), Some(3));
+        // Vignette 768×432 (sortie 4K) : 1280×720.
+        assert_eq!(pick_pip_mode(&modes, 768, 432), Some(2));
+        // Aucun mode 16:9 à ≥ 24 fps : recadrage par défaut.
+        assert_eq!(pick_pip_mode(&[(640, 480, 30), (1280, 720, 10)], 384, 216), None);
+        // Aucun mode assez grand : le plus grand au bon ratio.
+        assert_eq!(pick_pip_mode(&[(320, 180, 30), (160, 90, 30)], 384, 216), Some(0));
+    }
 
     #[test]
     fn pip_layout_proportionnel() {
