@@ -20,6 +20,7 @@ mod capture;
 mod encoder;
 mod ws_server;
 
+use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -38,21 +39,13 @@ use crate::state::{RecorderState, RecordingPhase};
 pub fn run() {
     // Logs vers %TEMP%\yawrec.log — toujours actif (release + debug).
     // Consulter ce fichier pour diagnostiquer les problèmes de capture.
-    let log_path = std::env::temp_dir().join("yawrec.log");
-    let log_file = std::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(&log_path)
-        .ok();
-
-    let mut log_builder = env_logger::Builder::from_env(
+    // Le fichier n'est ouvert qu'une fois l'instance unique confirmée
+    // (voir `open_log_file` dans setup).
+    env_logger::Builder::from_env(
         env_logger::Env::default().default_filter_or("info,yawrec=debug"),
-    );
-    if let Some(f) = log_file {
-        log_builder.target(env_logger::Target::Pipe(Box::new(f)));
-    }
-    log_builder.init();
+    )
+    .target(env_logger::Target::Pipe(Box::new(LogSink)))
+    .init();
 
     log::info!("YawREC · démarrage");
 
@@ -140,6 +133,10 @@ pub fn run() {
             ws_server::get_remote_pairing,
         ])
         .setup(move |app| {
+            // Le plugin single-instance a déjà fait quitter une éventuelle
+            // 2e instance : on peut vider et ouvrir le journal.
+            open_log_file();
+
             // ----------------------------------------------------
             // E2 : probe encodeur en arrière-plan pour ne pas bloquer
             // le démarrage si un driver HW est lent ou défaillant.
@@ -249,6 +246,70 @@ pub fn run() {
                 }
             }
         });
+}
+
+// ============================================================
+// Journal %TEMP%\yawrec.log
+// ============================================================
+
+/// État du journal : lignes en attente tant que le fichier n'est pas ouvert,
+/// puis le fichier (ou rien : repli sur stderr s'il n'a pas pu être ouvert).
+struct LogState {
+    pending: Option<Vec<u8>>,
+    file: Option<std::fs::File>,
+}
+
+static LOG_STATE: Mutex<LogState> = Mutex::new(LogState { pending: Some(Vec::new()), file: None });
+
+/// Sortie d'env_logger. Ouvrir (et vider) le fichier dès le lancement
+/// effaçait le journal de l'instance en cours quand on relançait l'app :
+/// la 2e instance le tronquait avant d'être fermée par single-instance.
+/// Les lignes émises avant `open_log_file` sont gardées en mémoire.
+struct LogSink;
+
+impl Write for LogSink {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let mut st = LOG_STATE.lock().unwrap_or_else(|p| p.into_inner());
+        let LogState { pending, file } = &mut *st;
+        if let Some(f) = file {
+            f.write(buf)
+        } else if let Some(p) = pending {
+            p.extend_from_slice(buf);
+            Ok(buf.len())
+        } else {
+            std::io::stderr().write(buf)
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        match &mut LOG_STATE.lock().unwrap_or_else(|p| p.into_inner()).file {
+            Some(f) => f.flush(),
+            None => Ok(()),
+        }
+    }
+}
+
+/// Ouvre %TEMP%\yawrec.log (vidé) et y recopie les lignes en attente.
+fn open_log_file() {
+    let path = std::env::temp_dir().join("yawrec.log");
+    let opened = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&path);
+    let mut st = LOG_STATE.lock().unwrap_or_else(|p| p.into_inner());
+    let pending = st.pending.take().unwrap_or_default();
+    match opened {
+        Ok(mut f) => {
+            let _ = f.write_all(&pending);
+            st.file = Some(f);
+        }
+        Err(e) => {
+            let _ = std::io::stderr().write_all(&pending);
+            drop(st);
+            log::warn!("Journal {} indisponible : {e}", path.display());
+        }
+    }
 }
 
 /// Affiche la fenêtre principale au premier plan (tray, 2e instance).
