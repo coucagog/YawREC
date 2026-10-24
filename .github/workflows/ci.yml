@@ -1,7 +1,7 @@
 # =============================================================
 # YAWREC · workflow CI
-# À chaque push / pull request : tests Rust + build frontend (Windows)
-# et compilation de l'app Android.
+# À chaque push / pull request : tests Rust, build frontend et exécutable
+# portable téléchargeable (Windows) ; compilation de l'app Android.
 # =============================================================
 name: CI
 
@@ -52,6 +52,34 @@ jobs:
       - name: Rust tests
         working-directory: yawrec/src-tauri
         run: cargo test --locked
+
+      # ----------------------------------------------------------
+      # Exécutable de test (portable, non signé) téléchargeable depuis
+      # la page du run. L'installeur reste produit par release.yml.
+      # ----------------------------------------------------------
+      - name: Generate icons
+        # icon.ico n'est pas versionné ; la CLI Tauri accepte le SVG source.
+        run: npx tauri icon docs/icon-source.svg
+
+      - name: Build release executable
+        run: npx tauri build --no-bundle -- --locked
+
+      - name: Collect portable build
+        shell: pwsh
+        run: |
+          $out = "portable"
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          Get-ChildItem src-tauri\target\release -Filter *.exe -File |
+            ForEach-Object { Copy-Item $_.FullName $out\ }
+          Copy-Item src-tauri\resources\ffmpeg-dlls\*.dll $out\
+          Get-ChildItem $out | Format-Table Name, Length
+
+      - name: Upload portable build
+        uses: actions/upload-artifact@v4
+        with:
+          name: yawrec-windows-portable-${{ github.sha }}
+          path: yawrec/portable/
+          retention-days: 14
 
   android:
     runs-on: ubuntu-latest
