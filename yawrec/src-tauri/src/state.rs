@@ -104,11 +104,12 @@ pub struct RecorderState {
     pub byte_count:        Arc<AtomicU64>,
     pub frame_count:       Arc<AtomicU64>,
     pub stop_flag:         Arc<AtomicBool>,
-    pub audio_paused:      Arc<AtomicBool>,
-    /// Accumulated milliseconds spent in pause (reset at each start_recording).
-    pub paused_total_ms:   Arc<AtomicU64>,
-    /// Wall-clock instant when the current pause began (None when not paused).
-    pub pause_started_at:  Option<Instant>,
+    /// Origine temporelle commune à tous les workers de l'enregistrement
+    /// courant (vidéo, audio, pauses). None hors enregistrement.
+    pub recording_epoch:   Option<Instant>,
+    /// Intervalles de pause de l'enregistrement courant, partagés avec les
+    /// workers pour qu'ils retirent les pauses de leurs timestamps.
+    pub pause_timeline:    Arc<PauseTimeline>,
 
     /// Encoder partagé : Some(Encoder) après lazy-init par le worker vidéo.
     pub encoder_arc: Option<Arc<Mutex<Option<Encoder>>>>,
@@ -157,9 +158,8 @@ impl Default for RecorderState {
             byte_count:       Arc::new(AtomicU64::new(0)),
             frame_count:      Arc::new(AtomicU64::new(0)),
             stop_flag:        Arc::new(AtomicBool::new(false)),
-            audio_paused:     Arc::new(AtomicBool::new(false)),
-            paused_total_ms:  Arc::new(AtomicU64::new(0)),
-            pause_started_at: None,
+            recording_epoch:  None,
+            pause_timeline:   Arc::new(PauseTimeline::default()),
             encoder_arc: None,
             pip_buffer: None,
             pip_position: Arc::new(AtomicU8::new(PipPosition::BottomRight.to_u8())),
@@ -174,7 +174,64 @@ impl Default for RecorderState {
     }
 }
 
+// ============================================================
+// PauseTimeline — intervalles de pause en ms depuis l'epoch
+// ============================================================
+
+/// Liste des pauses de l'enregistrement courant, en millisecondes depuis
+/// `recording_epoch`. Chaque worker convertit un instant "mur" en timestamp
+/// média en retirant la durée des pauses qui le précèdent ; un instant situé
+/// dans une pause est rejeté (None). Travailler par instant plutôt qu'avec
+/// un simple flag évite les décalages aux bornes de pause pour l'audio, qui
+/// est traité avec un retard de quelques centaines de ms.
+#[derive(Debug, Default)]
+pub struct PauseTimeline {
+    intervals: Mutex<Vec<(u64, Option<u64>)>>,
+}
+
+impl PauseTimeline {
+    pub fn reset(&self) {
+        self.intervals.lock().unwrap().clear();
+    }
+
+    pub fn pause_at(&self, at_ms: u64) {
+        let mut v = self.intervals.lock().unwrap();
+        if v.last().map_or(true, |(_, end)| end.is_some()) {
+            v.push((at_ms, None));
+        }
+    }
+
+    pub fn resume_at(&self, at_ms: u64) {
+        let mut v = self.intervals.lock().unwrap();
+        if let Some((start, end @ None)) = v.last_mut() {
+            *end = Some(at_ms.max(*start));
+        }
+    }
+
+    /// Instant mur (ms depuis l'epoch) → timestamp média (ms), ou None si
+    /// l'instant tombe pendant une pause.
+    pub fn media_ts(&self, wall_ms: u64) -> Option<u64> {
+        let v = self.intervals.lock().unwrap();
+        let mut paused = 0u64;
+        for &(start, end) in v.iter() {
+            if wall_ms < start {
+                break;
+            }
+            match end {
+                Some(end) if wall_ms >= end => paused += end - start,
+                _ => return None,
+            }
+        }
+        Some(wall_ms - paused)
+    }
+}
+
 impl RecorderState {
+    /// Millisecondes écoulées depuis le début de l'enregistrement courant.
+    pub fn epoch_ms(&self) -> u64 {
+        self.recording_epoch.map_or(0, |e| e.elapsed().as_millis() as u64)
+    }
+
     pub fn elapsed(&self) -> Duration {
         match (self.phase, self.started_at) {
             (RecordingPhase::Recording, Some(t)) => self.paused_offset + t.elapsed(),
@@ -216,5 +273,42 @@ impl RecorderState {
                 base.join("Videos").join("YawREC").to_string_lossy().into_owned()
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn media_ts_sans_pause() {
+        let t = PauseTimeline::default();
+        assert_eq!(t.media_ts(0), Some(0));
+        assert_eq!(t.media_ts(1234), Some(1234));
+    }
+
+    #[test]
+    fn media_ts_retire_les_pauses() {
+        let t = PauseTimeline::default();
+        t.pause_at(1000);
+        assert_eq!(t.media_ts(999), Some(999));
+        assert_eq!(t.media_ts(1500), None, "pause en cours");
+        t.resume_at(4000);
+        assert_eq!(t.media_ts(3999), None);
+        assert_eq!(t.media_ts(4000), Some(1000));
+        assert_eq!(t.media_ts(5000), Some(2000));
+        t.pause_at(6000);
+        t.resume_at(6500);
+        assert_eq!(t.media_ts(7000), Some(3500));
+    }
+
+    #[test]
+    fn double_pause_ignoree() {
+        let t = PauseTimeline::default();
+        t.pause_at(100);
+        t.pause_at(200);
+        t.resume_at(300);
+        t.resume_at(400);
+        assert_eq!(t.media_ts(500), Some(300));
     }
 }

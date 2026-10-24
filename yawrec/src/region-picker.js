@@ -2,8 +2,8 @@
 // YAWREC · region-picker.js
 // Overlay plein écran transparent — l'utilisateur dessine un
 // rectangle de capture. Les coordonnées sont envoyées en pixels
-// physiques (logique × devicePixelRatio) pour correspondre au
-// référentiel DXGI.
+// physiques du bureau (origine de l'écran + logique × devicePixelRatio)
+// pour correspondre au référentiel DXGI.
 // ============================================================
 
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -125,8 +125,11 @@ canvas.addEventListener("mouseup", (e) => {
 // ---- confirmation / annulation ----
 async function confirm() {
   if (!hasSelection) return;
-  const rx = Math.round(Math.min(startX, curX) * dpr);
-  const ry = Math.round(Math.min(startY, curY) * dpr);
+  // Le backend attend des coordonnées bureau : on ajoute l'origine physique
+  // de l'écran qui porte le picker (≠ 0,0 sur un écran secondaire).
+  const origin = await appWindow.outerPosition().catch(() => ({ x: 0, y: 0 }));
+  const rx = origin.x + Math.round(Math.min(startX, curX) * dpr);
+  const ry = origin.y + Math.round(Math.min(startY, curY) * dpr);
   const rw = (Math.round(Math.abs(curX - startX) * dpr)) & ~1; // arrondi pair H.264
   const rh = (Math.round(Math.abs(curY - startY) * dpr)) & ~1;
   if (rw < 2 || rh < 2) return;

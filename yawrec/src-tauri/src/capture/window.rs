@@ -30,12 +30,31 @@ mod platform {
         core::BOOL,
         Win32::{
             Foundation::{HWND, LPARAM, RECT},
+            Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_EXTENDED_FRAME_BOUNDS},
             UI::WindowsAndMessaging::{
                 EnumWindows, GetWindowLongW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
-                IsWindowVisible, GWL_EXSTYLE, GWL_STYLE, WS_EX_TOOLWINDOW, WS_MINIMIZE,
+                IsIconic, IsWindow, IsWindowVisible, GWL_EXSTYLE, GWL_STYLE, WS_EX_TOOLWINDOW,
+                WS_MINIMIZE,
             },
         },
     };
+
+    /// Cadre visible de la fenêtre. GetWindowRect inclut les bordures de
+    /// redimensionnement invisibles de Windows 10/11 (~7 px) ; DWM donne le
+    /// vrai cadre, avec repli sur GetWindowRect.
+    unsafe fn visible_rect(hwnd: HWND) -> Option<RECT> {
+        let mut rect = RECT::default();
+        let dwm = DwmGetWindowAttribute(
+            hwnd,
+            DWMWA_EXTENDED_FRAME_BOUNDS,
+            &mut rect as *mut RECT as *mut core::ffi::c_void,
+            std::mem::size_of::<RECT>() as u32,
+        );
+        if dwm.is_ok() && rect.right > rect.left && rect.bottom > rect.top {
+            return Some(rect);
+        }
+        GetWindowRect(hwnd, &mut rect).ok().map(|_| rect)
+    }
 
     /// Retourne toutes les fenêtres visibles, titrées, non-outil, non-minimisées,
     /// d'au moins 100×100 px.
@@ -79,10 +98,9 @@ mod platform {
         }
         let name = String::from_utf16_lossy(&buf[..chars as usize]);
 
-        let mut rect = RECT::default();
-        if GetWindowRect(hwnd, &mut rect).is_err() {
+        let Some(rect) = visible_rect(hwnd) else {
             return BOOL(1);
-        }
+        };
 
         let w = (rect.right - rect.left) as u32;
         let h = (rect.bottom - rect.top) as u32;
@@ -101,19 +119,18 @@ mod platform {
         BOOL(1) // continuer l'énumération
     }
 
-    /// Retourne (left, top, width, height) de la fenêtre en coordonnées bureau.
-    /// Retourne None si la fenêtre n'existe plus ou est inaccessible.
+    /// Retourne (left, top, width, height) du cadre visible de la fenêtre en
+    /// coordonnées bureau. None si la fenêtre n'existe plus ou est minimisée.
     pub fn get_window_rect(hwnd: i64) -> Option<(i32, i32, u32, u32)> {
         let handle = HWND(hwnd as usize as *mut core::ffi::c_void);
-        let mut rect = RECT::default();
         unsafe {
-            if GetWindowRect(handle, &mut rect).is_ok() {
-                let w = (rect.right - rect.left) as u32;
-                let h = (rect.bottom - rect.top) as u32;
-                Some((rect.left, rect.top, w, h))
-            } else {
-                None
+            if !IsWindow(Some(handle)).as_bool() || IsIconic(handle).as_bool() {
+                return None;
             }
+            let rect = visible_rect(handle)?;
+            let w = (rect.right - rect.left) as u32;
+            let h = (rect.bottom - rect.top) as u32;
+            Some((rect.left, rect.top, w, h))
         }
     }
 }

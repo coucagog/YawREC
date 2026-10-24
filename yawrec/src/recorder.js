@@ -65,6 +65,10 @@ export class Recorder {
   }
 
   async stop() {
+    // Un seul arrêt à la fois : l'arrêt auto est réévalué à chaque tick
+    // (250 ms) et appelait stop() plusieurs fois pendant la finalisation.
+    if (this._stopping) return null;
+    this._stopping = true;
     try {
       const path = await invoke("stop_recording");
       this.phase = "idle";
@@ -72,6 +76,9 @@ export class Recorder {
       return path;
     } catch (err) {
       this._onError(err);
+      return null;
+    } finally {
+      this._stopping = false;
     }
   }
 
@@ -99,12 +106,20 @@ export class Recorder {
       title: "Choisir le dossier de sortie YawREC",
     });
     if (selected && typeof selected === "string") {
-      this.outputDir = selected;
-      try { await invoke("set_output_directory", { path: selected }); }
-      catch (err) { this._onError(err); }
-      return selected;
+      return (await this.setOutputDirectory(selected)) ? selected : null;
     }
     return null;
+  }
+
+  async setOutputDirectory(path) {
+    try {
+      await invoke("set_output_directory", { path });
+      this.outputDir = path;
+      return true;
+    } catch (err) {
+      this._onError(err);
+      return false;
+    }
   }
 
   // ---------- Énumération devices ----------
@@ -208,6 +223,11 @@ export class Recorder {
   }
 
   // ---------- Encoder info (E2) ----------
+  async getRemotePairing() {
+    try { return await invoke("get_remote_pairing"); }
+    catch (err) { this._onError(err); return null; }
+  }
+
   async getActiveEncoder() {
     try { return await invoke("get_active_encoder"); }
     catch (err) { this._onError(err); return null; }

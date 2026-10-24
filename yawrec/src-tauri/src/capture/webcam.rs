@@ -36,12 +36,25 @@ pub enum WebcamError {
 // ============================================================
 // PiP — dimensions de la vignette webcam
 // ============================================================
-// 400 × 225 = 16:9, visible sans envahir l'écran à 1080p (≈ 9 % de surface).
-// La position est gérée côté composite (commands.rs::composite_pip) :
-// bas-droite avec MARGIN px depuis chaque bord.
-pub const PIP_WIDTH:  u32 = 400;
-pub const PIP_HEIGHT: u32 = 225;
-pub const PIP_MARGIN: u32 = 24;
+// La vignette est en 16:9 et proportionnelle à la largeur de la vidéo
+// produite (≈ 20 %), pour rester lisible en 4K comme sur une petite région.
+
+/// Taille et marge de l'incrustation pour une vidéo de largeur `out_w`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PipLayout {
+    pub width: u32,
+    pub height: u32,
+    pub margin: u32,
+}
+
+impl PipLayout {
+    pub fn for_output_width(out_w: u32) -> Self {
+        let width = ((out_w / 5).clamp(96, 960)) & !1;
+        let height = (width * 9 / 16) & !1;
+        let margin = (out_w / 80).clamp(8, 48);
+        Self { width, height, margin }
+    }
+}
 
 // ============================================================
 // API publique
@@ -67,16 +80,17 @@ pub fn list_devices() -> Result<Vec<DeviceInfo>, WebcamError> {
 /// Possède la Camera, écrit dans `pip_buffer` jusqu'à stop_flag.
 pub fn run_worker(
     device_index: u32,
+    layout: PipLayout,
     stop_flag: Arc<AtomicBool>,
     pip_buffer: Arc<Mutex<Option<Frame>>>,
 ) {
     #[cfg(target_os = "windows")]
     {
-        windows_impl::run_worker(device_index, stop_flag, pip_buffer);
+        windows_impl::run_worker(device_index, layout, stop_flag, pip_buffer);
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = (device_index, stop_flag, pip_buffer);
+        let _ = (device_index, layout, stop_flag, pip_buffer);
         log::warn!("Capture webcam non implémentée sur cette plateforme");
     }
 }
@@ -86,13 +100,12 @@ pub fn run_worker(
 // ============================================================
 
 /// Convertit un buffer RGB packé (3 bytes/pixel) vers BGRA (4 bytes/pixel)
-/// en redimensionnant via nearest-neighbor.
+/// en redimensionnant via nearest-neighbor, en mode "cover" : la source est
+/// recadrée au centre pour avoir le ratio de la destination, ce qui évite
+/// d'écraser une webcam 4:3 dans une vignette 16:9.
 ///
-/// Pourquoi nearest et pas bilinéaire ? Sur une vignette 400×225, la perte
-/// visuelle est imperceptible pour une webcam (qualité source déjà limitée),
-/// et nearest tient à ~500 MB/s sur un CPU récent — largement assez pour
-/// 30 fps de webcam même en 4K. Pour de la production cinéma il faudrait
-/// bilinéaire/lanczos, hors scope ici.
+/// Nearest suffit pour une vignette (qualité source déjà limitée) et tient
+/// largement 30 fps même pour une webcam 4K.
 pub fn rgb_to_bgra_nearest_resize(
     src_rgb: &[u8],
     src_w: u32,
@@ -101,17 +114,30 @@ pub fn rgb_to_bgra_nearest_resize(
     dst_h: u32,
 ) -> Vec<u8> {
     let mut out = vec![0u8; (dst_w * dst_h * 4) as usize];
-    if src_w == 0 || src_h == 0 || dst_w == 0 || dst_h == 0 {
+    if src_w == 0 || src_h == 0 || dst_w == 0 || dst_h == 0
+        || src_rgb.len() < (src_w * src_h * 3) as usize
+    {
         return out;
     }
 
-    let x_ratio = src_w as f64 / dst_w as f64;
-    let y_ratio = src_h as f64 / dst_h as f64;
+    // Zone source utilisée : le plus grand rectangle centré au ratio dst.
+    let (crop_w, crop_h) = if (src_w as u64) * (dst_h as u64) > (src_h as u64) * (dst_w as u64) {
+        (((src_h as u64 * dst_w as u64) / dst_h as u64) as u32, src_h)
+    } else {
+        (src_w, ((src_w as u64 * dst_h as u64) / dst_w as u64) as u32)
+    };
+    let crop_w = crop_w.max(1);
+    let crop_h = crop_h.max(1);
+    let x0 = (src_w - crop_w) / 2;
+    let y0 = (src_h - crop_h) / 2;
+
+    let x_ratio = crop_w as f64 / dst_w as f64;
+    let y_ratio = crop_h as f64 / dst_h as f64;
 
     for dy in 0..dst_h {
-        let sy = ((dy as f64 * y_ratio) as u32).min(src_h - 1);
+        let sy = (y0 + (dy as f64 * y_ratio) as u32).min(src_h - 1);
         for dx in 0..dst_w {
-            let sx = ((dx as f64 * x_ratio) as u32).min(src_w - 1);
+            let sx = (x0 + (dx as f64 * x_ratio) as u32).min(src_w - 1);
 
             let src_idx = ((sy * src_w + sx) * 3) as usize;
             let dst_idx = ((dy * dst_w + dx) * 4) as usize;
@@ -158,6 +184,7 @@ mod windows_impl {
 
     pub fn run_worker(
         device_index: u32,
+        layout: PipLayout,
         stop_flag: Arc<AtomicBool>,
         pip_buffer: Arc<Mutex<Option<Frame>>>,
     ) {
@@ -185,7 +212,7 @@ mod windows_impl {
         log::info!(
             "Webcam · ouverte ({}×{}) → PiP {}×{}",
             resolution.width(), resolution.height(),
-            PIP_WIDTH, PIP_HEIGHT,
+            layout.width, layout.height,
         );
 
         // 2. Boucle de capture
@@ -222,13 +249,13 @@ mod windows_impl {
 
             // 4. RGB → BGRA + resize vers dimensions PiP
             let bgra = rgb_to_bgra_nearest_resize(
-                rgb_data, src_w, src_h, PIP_WIDTH, PIP_HEIGHT,
+                rgb_data, src_w, src_h, layout.width, layout.height,
             );
 
             let pip_frame = Frame {
-                width:  PIP_WIDTH,
-                height: PIP_HEIGHT,
-                stride: PIP_WIDTH * 4,
+                width:  layout.width,
+                height: layout.height,
+                stride: layout.width * 4,
                 data: bgra,
                 timestamp: started_at.elapsed(),
             };
@@ -251,5 +278,39 @@ mod windows_impl {
         }
 
         log::info!("Worker webcam · terminé");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pip_layout_proportionnel() {
+        let l = PipLayout::for_output_width(1920);
+        assert_eq!((l.width, l.height, l.margin), (384, 216, 24));
+        let l4k = PipLayout::for_output_width(3840);
+        assert_eq!(l4k.width, 768);
+        let petit = PipLayout::for_output_width(300);
+        assert_eq!(petit.width, 96);
+        assert_eq!(petit.width % 2, 0);
+        assert_eq!(petit.height % 2, 0);
+    }
+
+    #[test]
+    fn resize_cover_recadre_le_centre() {
+        // Source 4×2 : colonnes 0 et 3 rouges, 1 et 2 vertes. Destination 1:1
+        // → seules les colonnes centrales (vertes) doivent être gardées.
+        let mut src = Vec::new();
+        for _y in 0..2 {
+            for x in 0..4 {
+                if x == 0 || x == 3 { src.extend_from_slice(&[255, 0, 0]); }
+                else { src.extend_from_slice(&[0, 255, 0]); }
+            }
+        }
+        let out = rgb_to_bgra_nearest_resize(&src, 4, 2, 2, 2);
+        for px in out.chunks_exact(4) {
+            assert_eq!(px, &[0, 255, 0, 255]);
+        }
     }
 }

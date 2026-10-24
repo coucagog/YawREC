@@ -211,10 +211,15 @@ impl Default for EncoderConfig {
 
 struct VideoTrack {
     encoder: ff_encoder::Video,
+    /// Scaler BGRA (taille source) → YUV420P (taille encodeur). Recréé si
+    /// la taille des frames source change (ex. changement de résolution).
     scaler: scaling::Context,
     bgra_frame: frame::Video,
     yuv_frame: frame::Video,
+    src_w: u32,
+    src_h: u32,
     frame_index: i64,
+    last_pts: Option<i64>,
     stream_idx: usize,
     used_encoder: VideoEncoder,
 }
@@ -224,7 +229,9 @@ struct AudioTrack {
     /// Buffer interleavé en F32 stéréo @48kHz, accumule jusqu'à frame_size*2.
     sample_buffer: VecDeque<f32>,
     frame_size: usize,    // samples par canal (généralement 1024 pour AAC)
-    pts: i64,             // PTS en samples (time_base = 1/sample_rate)
+    /// PTS en samples (time_base = 1/sample_rate). None jusqu'au premier
+    /// push, qui le cale sur la position temporelle du chunk.
+    pts: Option<i64>,
     stream_idx: usize,
 }
 
@@ -277,7 +284,10 @@ impl Encoder {
             scaler,
             bgra_frame,
             yuv_frame,
+            src_w: config.width,
+            src_h: config.height,
             frame_index: 0,
+            last_pts: None,
             stream_idx: video_stream_idx,
             used_encoder: used_video,
         };
@@ -328,14 +338,42 @@ impl Encoder {
     // ---------------------------------------------------------
     // Vidéo
     // ---------------------------------------------------------
-    pub fn push_video_frame(&mut self, bgra: &[u8], timestamp_ms: u64) -> Result<(), EncoderError> {
+    /// Pousse une frame BGRA8 packée de taille `src_w`×`src_h`. Si elle
+    /// diffère de la taille de l'encodeur, elle est mise à l'échelle.
+    /// Les timestamps non croissants sont ignorés (le muxer les refuserait).
+    pub fn push_video_frame(
+        &mut self,
+        bgra: &[u8],
+        src_w: u32,
+        src_h: u32,
+        timestamp_ms: u64,
+    ) -> Result<(), EncoderError> {
         if self.finished {
             return Err(EncoderError::Encoding("Encoder déjà fermé".into()));
         }
+        let pts = timestamp_ms as i64;
+        if self.video.last_pts.is_some_and(|last| pts <= last) {
+            return Ok(());
+        }
+
+        if src_w != self.video.src_w || src_h != self.video.src_h {
+            log::info!(
+                "Encoder · taille source {}×{} → {}×{} (mise à l'échelle vers {}×{})",
+                self.video.src_w, self.video.src_h, src_w, src_h, self.width, self.height,
+            );
+            self.video.scaler = scaling::Context::get(
+                format::Pixel::BGRA,    src_w, src_h,
+                format::Pixel::YUV420P, self.width, self.height,
+                scaling::Flags::BILINEAR,
+            ).map_err(EncoderError::Ffmpeg)?;
+            self.video.bgra_frame = frame::Video::new(format::Pixel::BGRA, src_w, src_h);
+            self.video.src_w = src_w;
+            self.video.src_h = src_h;
+        }
 
         let stride    = self.video.bgra_frame.stride(0);
-        let row_bytes = (self.width as usize) * 4;
-        let expected  = row_bytes * self.height as usize;
+        let row_bytes = (src_w as usize) * 4;
+        let expected  = row_bytes * src_h as usize;
 
         if bgra.len() < expected {
             return Err(EncoderError::Encoding(format!(
@@ -347,7 +385,7 @@ impl Encoder {
         if stride == row_bytes {
             dst[..expected].copy_from_slice(&bgra[..expected]);
         } else {
-            for y in 0..self.height as usize {
+            for y in 0..src_h as usize {
                 let src_off = y * row_bytes;
                 let dst_off = y * stride;
                 dst[dst_off..dst_off + row_bytes]
@@ -358,7 +396,8 @@ impl Encoder {
         self.video.scaler.run(&self.video.bgra_frame, &mut self.video.yuv_frame)
             .map_err(EncoderError::Ffmpeg)?;
 
-        self.video.yuv_frame.set_pts(Some(timestamp_ms as i64));
+        self.video.yuv_frame.set_pts(Some(pts));
+        self.video.last_pts = Some(pts);
         self.video.frame_index += 1;
 
         self.video.encoder.send_frame(&self.video.yuv_frame)
@@ -396,8 +435,12 @@ impl Encoder {
     // ---------------------------------------------------------
 
     /// `samples` : interleavé stéréo f32 @ self.audio_sample_rate.
+    /// `timestamp_ms` : position média du premier échantillon ; seul le
+    /// premier appel l'utilise (pour aligner l'audio sur la vidéo), ensuite
+    /// le PTS avance au nombre d'échantillons — l'appelant fournit un flux
+    /// continu cadencé sur l'horloge murale.
     /// Si aucun track audio n'a été configuré, l'appel est ignoré silencieusement.
-    pub fn push_audio_samples(&mut self, samples: &[f32], _timestamp_ms: u64) -> Result<(), EncoderError> {
+    pub fn push_audio_samples(&mut self, samples: &[f32], timestamp_ms: u64) -> Result<(), EncoderError> {
         if self.finished {
             return Err(EncoderError::Encoding("Encoder déjà fermé".into()));
         }
@@ -406,6 +449,10 @@ impl Encoder {
             Some(a) => a,
             None => return Ok(()),
         };
+
+        if audio.pts.is_none() {
+            audio.pts = Some(timestamp_ms as i64 * self.audio_sample_rate as i64 / 1000);
+        }
 
         // Empile dans le buffer (f32 interleavé stéréo)
         audio.sample_buffer.extend(samples.iter().copied());
@@ -438,8 +485,9 @@ impl Encoder {
                 }
             }
 
-            planar.set_pts(Some(audio.pts));
-            audio.pts += audio.frame_size as i64;
+            let pts = audio.pts.unwrap_or(0);
+            planar.set_pts(Some(pts));
+            audio.pts = Some(pts + audio.frame_size as i64);
 
             audio.encoder.send_frame(&planar).map_err(EncoderError::Ffmpeg)?;
             drain_audio_packets(audio, &mut self.octx, &mut self.bytes_written)?;
@@ -652,7 +700,7 @@ fn open_audio_track(
         encoder: opened,
         sample_buffer: VecDeque::with_capacity(frame_size * 4),
         frame_size,
-        pts: 0,
+        pts: None,
         stream_idx,
     })
 }

@@ -120,13 +120,11 @@ const recorder = new Recorder({
   },
   onError: (err) => {
     console.error("[YawREC]", err);
-    const timerEl = document.getElementById("timer-text");
-    timerEl.textContent = "ERREUR";
-    timerEl.title = typeof err === "string" ? err : JSON.stringify(err);
-    setTimeout(() => {
-      timerEl.textContent = "00:00:00";
-      timerEl.title = "";
-    }, 4000);
+    const message = typeof err === "string" ? err : (err?.message || JSON.stringify(err));
+    showErrorToast(message);
+    if (recorder.phase === "idle") {
+      document.getElementById("timer-text").textContent = "00:00:00";
+    }
   },
 });
 
@@ -137,6 +135,13 @@ document.getElementById("btn-rec").addEventListener("click", async () => {
     // En mode région sans zone définie → ouvrir le picker d'abord
     if (recorder.mode === "region" && !selectedRegion) {
       await recorder.openRegionPicker();
+      return;
+    }
+    // En mode fenêtre sans fenêtre choisie → ouvrir la liste d'abord
+    // (sinon le backend refuse de démarrer).
+    if (recorder.mode === "window" && !selectedHwnd) {
+      await populateWindowPopover();
+      openPopover("popover-window");
       return;
     }
     recorder.start();
@@ -561,9 +566,22 @@ function showSavedToast(filePath) {
   _toastPath = filePath;
   const sep = filePath.includes("\\") ? "\\" : "/";
   const filename = filePath.split(sep).pop();
-  document.getElementById("toast-filename").textContent = filename;
+  showToast("Enregistrement sauvegardé", filename, false);
+}
+
+function showErrorToast(message) {
+  _toastPath = null;
+  showToast("Erreur", message, true);
+}
+
+function showToast(title, text, isError) {
+  document.getElementById("toast-title").textContent = title;
+  const textEl = document.getElementById("toast-filename");
+  textEl.textContent = text;
+  textEl.title = text;
 
   const toast = document.getElementById("toast-saved");
+  toast.classList.toggle("toast-error", isError);
   // Reset animation en retirant puis rajoutant la classe
   toast.classList.remove("visible");
   void toast.offsetWidth; // force reflow
@@ -691,9 +709,12 @@ function buildOutputPreview(prefix) {
   return `${prefix || "YawREC"}_${dateStr}_${timeStr}.mp4`;
 }
 
+// Dossier de sortie courant (le footer affiche aussi le préfixe, on ne
+// peut donc pas relire le dossier depuis son texte).
+let outputDirPath = "";
+
 function refreshOutputPopover() {
-  const pathEl   = document.getElementById("output-path-text");
-  document.getElementById("output-dir-display").textContent = pathEl.textContent;
+  document.getElementById("output-dir-display").textContent = outputDirPath;
   document.getElementById("output-prefix-input").value      = filenamePrefix;
   document.getElementById("output-preview").textContent     = buildOutputPreview(filenamePrefix);
 }
@@ -736,6 +757,8 @@ document.getElementById("output-dir-btn").addEventListener("click", async (e) =>
   e.stopPropagation();
   const path = await recorder.pickOutputDirectory();
   if (path) {
+    outputDirPath = path;
+    localStorage.setItem("yawrec_output_dir", path);
     document.getElementById("output-path-text").textContent = path;
     document.getElementById("output-dir-display").textContent = path;
   }
@@ -770,9 +793,18 @@ document.getElementById("output-prefix-input").addEventListener("blur", async (e
 async function init() {
   await recorder.init();
 
-  // Afficher le dossier de sortie par défaut
+  // Dossier de sortie : restaurer le choix précédent s'il existe encore
+  const savedOutDir = localStorage.getItem("yawrec_output_dir");
+  if (savedOutDir) {
+    try {
+      await invoke("set_output_directory", { path: savedOutDir });
+    } catch {
+      localStorage.removeItem("yawrec_output_dir"); // dossier supprimé / débranché
+    }
+  }
   const outDir = await recorder.getOutputDirectory();
   if (outDir) {
+    outputDirPath = outDir;
     document.getElementById("output-path-text").textContent = outDir;
   }
 
@@ -851,7 +883,7 @@ async function init() {
         <span>Pause</span>
         <span class="kbd">Ctrl</span>
         <span class="kbd">Shift</span>
-        <span class="kbd">P</span>
+        <span class="kbd">F10</span>
       </span>`
     );
   }
@@ -888,14 +920,17 @@ qrItem.addEventListener("click", async (e) => {
     return;
   }
   closeAllPopovers();
-  const ip = await invoke("get_local_ip");
+  const pairing = await recorder.getRemotePairing();
+  if (!pairing) return;
   const canvas = document.getElementById("qr-canvas");
-  await QRCode.toCanvas(canvas, `yawrec://${ip}:9799`, {
+  // Le QR embarque le jeton d'appairage exigé par le serveur WebSocket.
+  await QRCode.toCanvas(canvas, pairing.url, {
     width: 144,
     margin: 1,
     color: { dark: "#1a1a2e", light: "#ffffff" },
   });
-  document.getElementById("qr-ip-text").textContent = `${ip} : 9799`;
+  document.getElementById("qr-ip-text").textContent =
+    `${pairing.ip} : ${pairing.port} · code ${pairing.token}`;
   qrPopover.classList.add("visible");
   qrPopover.setAttribute("aria-hidden", "false");
 });

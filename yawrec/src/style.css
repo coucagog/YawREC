@@ -764,6 +764,14 @@ html, body {
 }
 #toast-saved.visible { transform: translateY(0); }
 
+/* Variante erreur du toast (même composant, couleurs rouges, pas de bouton Ouvrir) */
+#toast-saved.toast-error { border-color: rgba(239, 68, 68, 0.30); background: rgba(24, 10, 10, 0.97); }
+#toast-saved.toast-error .toast-title { color: #f87171; }
+#toast-saved.toast-error .toast-filename { white-space: normal; line-height: 1.25; }
+#toast-saved.toast-error .toast-icon,
+#toast-saved.toast-error .toast-btn { display: none; }
+#toast-saved.toast-error .toast-progress { background: rgba(239, 68, 68, 0.45); }
+
 .toast-icon { width: 18px; height: 18px; flex-shrink: 0; }
 
 .toast-body {

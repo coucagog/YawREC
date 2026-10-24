@@ -7,8 +7,10 @@
 //   - état partagé (RecorderState dans un Mutex)
 //   - probe encodeur HW (E2)
 //   - tick loop 250 ms (C3)
-//   - F1 : raccourci global Ctrl+Shift+R (toggle recording)
+//   - F1 : raccourcis globaux Ctrl+Shift+F9 (start/stop) et Ctrl+Shift+F10 (pause)
 //   - F4 : tray icon avec menu (Afficher / Démarrer-Arrêter / Quitter)
+//   - fermeture/quitter pendant un enregistrement : le MP4 est finalisé
+//     avant la sortie (sinon l'index moov manque et le fichier est illisible)
 // ============================================================
 
 mod commands;
@@ -18,17 +20,18 @@ mod capture;
 mod encoder;
 mod ws_server;
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Emitter, Manager,
+    Emitter, Manager, RunEvent,
 };
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
-use crate::commands::{do_pause_recording, do_toggle_recording, StatusPayload};
+use crate::commands::{do_stop_recording, do_toggle_pause, do_toggle_recording, StatusPayload};
 use crate::state::{RecorderState, RecordingPhase};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -53,15 +56,19 @@ pub fn run() {
 
     log::info!("YawREC · démarrage");
 
-    // Ctrl+Shift+R — toggle enregistrement
-    let ctrl_shift_r = Shortcut::new(
+    // Raccourcis globaux. Ctrl+Shift+R / Ctrl+Shift+P étaient captés dans
+    // tout le système et volaient le rechargement forcé des navigateurs et
+    // la palette de commandes de VS Code ; les touches F9/F10 avec
+    // Ctrl+Shift sont très peu utilisées.
+    // Ctrl+Shift+F9 — toggle enregistrement
+    let shortcut_record = Shortcut::new(
         Some(Modifiers::CONTROL | Modifiers::SHIFT),
-        Code::KeyR,
+        Code::F9,
     );
-    // Ctrl+Shift+P — pause/reprendre
-    let ctrl_shift_p = Shortcut::new(
+    // Ctrl+Shift+F10 — pause/reprendre
+    let shortcut_pause = Shortcut::new(
         Some(Modifiers::CONTROL | Modifiers::SHIFT),
-        Code::KeyP,
+        Code::F10,
     );
 
     tauri::Builder::default()
@@ -78,18 +85,15 @@ pub fn run() {
                     if event.state() != ShortcutState::Pressed {
                         return;
                     }
-                    if shortcut == &ctrl_shift_r {
-                        log::debug!("Ctrl+Shift+R déclenché");
+                    if shortcut == &shortcut_record {
+                        log::debug!("Ctrl+Shift+F9 déclenché");
                         let app = app.clone();
                         tauri::async_runtime::spawn(async move {
                             do_toggle_recording(app).await;
                         });
-                    } else if shortcut == &ctrl_shift_p {
-                        log::debug!("Ctrl+Shift+P déclenché");
-                        let app = app.clone();
-                        tauri::async_runtime::spawn(async move {
-                            do_pause_recording(app).await;
-                        });
+                    } else if shortcut == &shortcut_pause {
+                        log::debug!("Ctrl+Shift+F10 déclenché");
+                        do_toggle_pause(app);
                     }
                 })
                 .build(),
@@ -123,6 +127,7 @@ pub fn run() {
             commands::get_video_quality,
             commands::set_filename_prefix,
             commands::get_local_ip,
+            ws_server::get_remote_pairing,
         ])
         .setup(move |app| {
             // ----------------------------------------------------
@@ -137,15 +142,11 @@ pub fn run() {
             // ----------------------------------------------------
             // F1 : enregistrer le raccourci
             // ----------------------------------------------------
-            if let Err(e) = app.global_shortcut().register(ctrl_shift_r) {
-                log::warn!("raccourci Ctrl+Shift+R impossible : {e}");
-            } else {
-                log::info!("Ctrl+Shift+R actif");
-            }
-            if let Err(e) = app.global_shortcut().register(ctrl_shift_p) {
-                log::warn!("raccourci Ctrl+Shift+P impossible : {e}");
-            } else {
-                log::info!("Ctrl+Shift+P actif");
+            for (shortcut, label) in [(shortcut_record, "Ctrl+Shift+F9"), (shortcut_pause, "Ctrl+Shift+F10")] {
+                match app.global_shortcut().register(shortcut) {
+                    Ok(()) => log::info!("{label} actif"),
+                    Err(e) => log::warn!("raccourci {label} impossible : {e}"),
+                }
             }
 
             // ----------------------------------------------------
@@ -200,6 +201,8 @@ pub fn run() {
             // ----------------------------------------------------
             // Serveur WebSocket — contrôle à distance Android
             // ----------------------------------------------------
+            let token = crate::ws_server::load_or_create_token(app.handle());
+            app.manage(crate::ws_server::RemoteToken(token));
             let app_ws = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 crate::ws_server::run(app_ws).await;
@@ -208,8 +211,34 @@ pub fn run() {
             log::info!("YawREC · fenêtre prête");
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("YawREC : erreur fatale au lancement");
+        .build(tauri::generate_context!())
+        .expect("YawREC : erreur fatale au lancement")
+        .run(|app, event| {
+            if let RunEvent::ExitRequested { api, .. } = event {
+                // Sortie (fenêtre fermée, « Quitter » du tray…) pendant un
+                // enregistrement : on retient la sortie le temps de finaliser
+                // le MP4, puis on quitte pour de bon.
+                static FINALIZING: AtomicBool = AtomicBool::new(false);
+                let recording = app.state::<Mutex<RecorderState>>().lock().unwrap().phase
+                    != RecordingPhase::Idle;
+                if !recording {
+                    return;
+                }
+                // Toute demande de sortie pendant la finalisation est retenue ;
+                // la sortie finale a lieu une fois l'état repassé à Idle.
+                api.prevent_exit();
+                if !FINALIZING.swap(true, Ordering::SeqCst) {
+                    log::info!("Sortie demandée pendant l'enregistrement — finalisation du fichier");
+                    let app = app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        if let Err(e) = do_stop_recording(&app).await {
+                            log::warn!("finalisation avant sortie : {e}");
+                        }
+                        app.exit(0);
+                    });
+                }
+            }
+        });
 }
 
 // ============================================================
@@ -222,7 +251,7 @@ fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
         app, "tray-show", "Afficher YawREC", true, None::<&str>,
     )?;
     let toggle_item = MenuItem::with_id(
-        app, "tray-toggle", "Démarrer / Arrêter (Ctrl+Shift+R)", true, None::<&str>,
+        app, "tray-toggle", "Démarrer / Arrêter (Ctrl+Shift+F9)", true, None::<&str>,
     )?;
     let separator = PredefinedMenuItem::separator(app)?;
     let quit_item = MenuItem::with_id(

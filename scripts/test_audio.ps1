@@ -32,12 +32,12 @@ else { Fail "App démarrée" "Processus terminé prématurément"; exit 1 }
 # ---- 3. Test enregistrement court (mic seul, 10s) ----
 Log "=== 3. Enregistrement 10s (mic seul) ==="
 $wsh = New-Object -ComObject WScript.Shell
-$wsh.SendKeys("^+r")
-Log "Démarrage via Ctrl+Shift+R"
+$wsh.SendKeys("^+{F9}")
+Log "Démarrage via Ctrl+Shift+F9"
 Start-Sleep -Seconds 10
 
-$wsh.SendKeys("^+r")
-Log "Arrêt via Ctrl+Shift+R"
+$wsh.SendKeys("^+{F9}")
+Log "Arrêt via Ctrl+Shift+F9"
 Start-Sleep -Seconds 5
 
 # ---- 4. Vérifier le fichier MP4 produit ----
@@ -85,19 +85,19 @@ if ($mp4Files) {
 # ---- 5. Test pause/reprise (5s rec, pause 3s, reprise 5s) ----
 Log "=== 5. Test Pause / Reprise ==="
 Start-Sleep -Seconds 2
-$wsh.SendKeys("^+r")
+$wsh.SendKeys("^+{F9}")
 Log "Démarrage enregistrement #2"
 Start-Sleep -Seconds 5
 
-$wsh.SendKeys("^+p")
-Log "Pause via Ctrl+Shift+P"
+$wsh.SendKeys("^+{F10}")
+Log "Pause via Ctrl+Shift+F10"
 Start-Sleep -Seconds 3
 
-$wsh.SendKeys("^+p")
-Log "Reprise via Ctrl+Shift+P"
+$wsh.SendKeys("^+{F10}")
+Log "Reprise via Ctrl+Shift+F10"
 Start-Sleep -Seconds 5
 
-$wsh.SendKeys("^+r")
+$wsh.SendKeys("^+{F9}")
 Log "Arrêt"
 Start-Sleep -Seconds 5
 
