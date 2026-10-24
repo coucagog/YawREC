@@ -232,6 +232,7 @@ mod windows_impl {
         };
 
         // Mode natif au ratio de la vignette, si la caméra en propose un.
+        let mut chosen: Option<CameraFormat> = None;
         match camera.compatible_camera_formats() {
             Ok(formats) => {
                 let modes: Vec<(u32, u32, u32)> = formats.iter()
@@ -240,8 +241,9 @@ mod windows_impl {
                 if let Some(i) = pick_pip_mode(&modes, layout.width, layout.height) {
                     let wanted: CameraFormat = formats[i];
                     let request = RequestedFormat::new::<RgbFormat>(RequestedFormatType::Exact(wanted));
-                    if let Err(e) = camera.set_camera_requset(request) {
-                        log::debug!("Webcam · mode {wanted} refusé : {e}");
+                    match camera.set_camera_requset(request) {
+                        Ok(_) => chosen = Some(wanted),
+                        Err(e) => log::debug!("Webcam · mode {wanted} refusé : {e}"),
                     }
                 }
             }
@@ -253,15 +255,19 @@ mod windows_impl {
             return;
         }
 
+        // Après un changement de mode, nokhwa (MSMF) relit le framerate en
+        // ne gardant que le dénominateur (« @1FPS ») : on affiche le mode
+        // demandé, et la cadence réelle est journalisée à la fin.
         log::info!(
             "Webcam · ouverte ({}) → PiP {}×{}",
-            camera.camera_format(), layout.width, layout.height,
+            chosen.unwrap_or_else(|| camera.camera_format()), layout.width, layout.height,
         );
 
         // 2. Boucle de capture
         let started_at = Instant::now();
         let mut consecutive_errors = 0u32;
         let mut first_frame = true;
+        let mut frames = 0u64;
 
         while !stop_flag.load(Ordering::Relaxed) {
             let buffer = match camera.frame() {
@@ -293,6 +299,7 @@ mod windows_impl {
                 first_frame = false;
                 log::info!("Webcam · 1re image décodée : {src_w}×{src_h}");
             }
+            frames += 1;
             let rgb_data: &[u8] = rgb_image.as_raw();
 
             // 4. RGB → BGRA + resize vers dimensions PiP
@@ -325,7 +332,11 @@ mod windows_impl {
             *g = None;
         }
 
-        log::info!("Worker webcam · terminé");
+        let secs = started_at.elapsed().as_secs_f64();
+        log::info!(
+            "Worker webcam · terminé — {frames} images en {secs:.1} s ({:.1} i/s)",
+            if secs > 0.0 { frames as f64 / secs } else { 0.0 },
+        );
     }
 }
 

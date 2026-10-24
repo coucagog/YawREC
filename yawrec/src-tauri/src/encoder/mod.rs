@@ -303,7 +303,9 @@ pub type YuvFrame = frame::Video;
 pub struct EncodeTiming {
     /// avcodec_send_frame (x264 : encodage / attente de ses threads).
     pub send_ms: f64,
-    /// Réception des paquets + écriture dans le MP4.
+    /// avcodec_receive_packet (x264 : encodage différé, lookahead).
+    pub receive_ms: f64,
+    /// av_interleaved_write_frame : écriture dans le MP4.
     pub write_ms: f64,
 }
 
@@ -431,22 +433,27 @@ impl Encoder {
         let t_send = std::time::Instant::now();
         self.video.encoder.send_frame(&yuv)
             .map_err(EncoderError::Ffmpeg)?;
-        let t_write = std::time::Instant::now();
-        self.drain_video_packets()?;
+        let t_drain = std::time::Instant::now();
+        let write = self.drain_video_packets()?;
+        let drain_ms = t_drain.elapsed().as_secs_f64() * 1000.0;
+        let write_ms = write.as_secs_f64() * 1000.0;
 
         Ok(EncodeTiming {
-            send_ms: (t_write - t_send).as_secs_f64() * 1000.0,
-            write_ms: t_write.elapsed().as_secs_f64() * 1000.0,
+            send_ms: (t_drain - t_send).as_secs_f64() * 1000.0,
+            receive_ms: (drain_ms - write_ms).max(0.0),
+            write_ms,
         })
     }
 
-    fn drain_video_packets(&mut self) -> Result<(), EncoderError> {
+    /// Retourne le temps passé à écrire dans le MP4.
+    fn drain_video_packets(&mut self) -> Result<std::time::Duration, EncoderError> {
         let enc_tb = self.video.encoder.time_base();
         let stream_tb = self.octx
             .stream(self.video.stream_idx)
             .ok_or_else(|| EncoderError::Mux("stream vidéo introuvable".into()))?
             .time_base();
 
+        let mut write = std::time::Duration::ZERO;
         loop {
             let mut packet = Packet::empty();
             match self.video.encoder.receive_packet(&mut packet) {
@@ -454,13 +461,15 @@ impl Encoder {
                     packet.set_stream(self.video.stream_idx);
                     packet.rescale_ts(enc_tb, stream_tb);
                     self.bytes_written += packet.size() as u64;
+                    let t = std::time::Instant::now();
                     packet.write_interleaved(&mut self.octx)
                         .map_err(EncoderError::Ffmpeg)?;
+                    write += t.elapsed();
                 }
                 Err(_) => break,
             }
         }
-        Ok(())
+        Ok(write)
     }
 
     // ---------------------------------------------------------

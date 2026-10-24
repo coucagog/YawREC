@@ -12,6 +12,7 @@
 // soit le chemin par lequel la pause a été déclenchée.
 // ============================================================
 
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
@@ -265,12 +266,18 @@ fn video_loop(ctx: &VideoWorkerCtx) -> Option<String> {
 
     let (tx, rx) = std::sync::mpsc::sync_channel::<QueuedFrame>(VIDEO_QUEUE_FRAMES);
     let encode_thread = {
+        let config = EncoderConfig {
+            output_path: ctx.output_path.clone(),
+            fps: ctx.video_fps,
+            bitrate_kbps: ctx.video_bitrate_kbps,
+            ..Default::default()
+        };
         let encoder_arc = ctx.encoder_arc.clone();
         let frame_count = ctx.frame_count.clone();
         let byte_count = ctx.byte_count.clone();
         std::thread::Builder::new()
             .name("yawrec-video-encode".into())
-            .spawn(move || encode_loop(rx, encoder_arc, frame_count, byte_count))
+            .spawn(move || encode_loop(rx, config, encoder_arc, frame_count, byte_count))
     };
     let encode_thread = match encode_thread {
         Ok(h) => h,
@@ -315,25 +322,13 @@ fn video_loop(ctx: &VideoWorkerCtx) -> Option<String> {
         }
         let capture_ms = t_capture.elapsed().as_secs_f64() * 1000.0;
 
-        // Encodeur et convertisseur créés à la 1re frame (dimensions connues).
+        // Convertisseur créé à la 1re frame (dimensions connues) ; l'encodeur
+        // naît dans le thread d'encodage, sans bloquer la capture.
         if converter.is_none() {
             // H.264 4:2:0 exige des dimensions paires.
-            let (w, h) = (base.width & !1, base.height & !1);
-            let config = EncoderConfig {
-                output_path: ctx.output_path.clone(),
-                width: w,
-                height: h,
-                fps: ctx.video_fps,
-                bitrate_kbps: ctx.video_bitrate_kbps,
-                ..Default::default()
-            };
-            let created = Encoder::new(config).and_then(|e| Ok((e, FrameConverter::new(w, h)?)));
-            match created {
-                Ok((enc, conv)) => {
-                    *ctx.encoder_arc.lock().unwrap_or_else(|p| p.into_inner()) = Some(enc);
-                    converter = Some(conv);
-                }
-                Err(e) => { fatal = Some(format!("Encodeur : {e}")); break; }
+            match FrameConverter::new(base.width & !1, base.height & !1) {
+                Ok(conv) => converter = Some(conv),
+                Err(e) => { fatal = Some(format!("Conversion vidéo : {e}")); break; }
             }
         }
         let conv = converter.as_mut().expect("convertisseur initialisé");
@@ -364,7 +359,7 @@ fn video_loop(ctx: &VideoWorkerCtx) -> Option<String> {
             // Le thread d'encodage s'est arrêté sur une erreur : on la récupère au join.
             Err(std::sync::mpsc::TrySendError::Disconnected(_)) => break,
         }
-        stats.record(ts_ms, interval_ms, capture_ms, convert_ms);
+        stats.record(ts_ms, interval_ms, capture_ms, convert_ms, capturer.access_lost());
     }
 
     // Fin de file : le thread d'encodage vide ce qui reste puis s'arrête.
@@ -380,15 +375,32 @@ fn video_loop(ctx: &VideoWorkerCtx) -> Option<String> {
 
 /// Thread d'encodage : encode les frames de la file dans l'ordre, jusqu'à
 /// sa fermeture. Retourne Some(message) en cas d'erreur fatale.
+///
+/// L'encodeur est créé à la 1re frame. Son ouverture (essai des encodeurs
+/// matériels puis x264) peut prendre plusieurs centaines de ms : faite dans
+/// la boucle de capture, elle figeait le début de la vidéo.
 fn encode_loop(
     rx: std::sync::mpsc::Receiver<QueuedFrame>,
+    config: EncoderConfig,
     encoder_arc: Arc<Mutex<Option<Encoder>>>,
     frame_count: Arc<AtomicU64>,
     byte_count: Arc<AtomicU64>,
 ) -> Option<String> {
     let mut stats = EncodeStats::default();
     let mut error = None;
+    let mut config = Some(config);
     for (yuv, ts_ms) in rx.iter() {
+        if let Some(mut config) = config.take() {
+            config.width = yuv.width();
+            config.height = yuv.height();
+            match Encoder::new(config) {
+                Ok(enc) => *encoder_arc.lock().unwrap_or_else(|p| p.into_inner()) = Some(enc),
+                Err(e) => {
+                    error = Some(format!("Encodeur : {e}"));
+                    break;
+                }
+            }
+        }
         let t_lock = Instant::now();
         let mut guard = encoder_arc.lock().unwrap_or_else(|p| p.into_inner());
         let lock_ms = t_lock.elapsed().as_secs_f64() * 1000.0;
@@ -416,6 +428,8 @@ struct CaptureStats {
     frames: u64,
     last_ts: Option<u64>,
     stalls: u64,
+    /// Écarts dus à l'écran inaccessible (UAC…) : attendus, comptés à part.
+    access_waits: u64,
     /// Frames abandonnées faute de place dans la file d'encodage.
     dropped: u64,
     convert_total_ms: f64,
@@ -425,10 +439,13 @@ struct CaptureStats {
 const STALL_MS: u64 = 200;
 
 impl CaptureStats {
-    fn record(&mut self, ts_ms: u64, interval_ms: f64, capture_ms: f64, convert_ms: f64) {
+    fn record(&mut self, ts_ms: u64, interval_ms: f64, capture_ms: f64, convert_ms: f64, access_lost: bool) {
         if let Some(last) = self.last_ts {
             let gap = ts_ms.saturating_sub(last);
-            if gap > STALL_MS.max(interval_ms as u64 * 3) {
+            let stalled = gap > STALL_MS.max(interval_ms as u64 * 3);
+            if stalled && access_lost {
+                self.access_waits += 1;
+            } else if stalled {
                 self.stalls += 1;
                 log::warn!(
                     "Vidéo · gel de capture de {gap} ms à t={ts_ms} ms (capture {capture_ms:.0} ms, \
@@ -446,12 +463,14 @@ impl CaptureStats {
             return;
         }
         log::info!(
-            "Vidéo · capture : {} frames, conversion moyenne {:.1} ms, {} gel(s) > {} ms, {} frame(s) abandonnée(s) (file pleine)",
+            "Vidéo · capture : {} frames, conversion moyenne {:.1} ms, {} gel(s) > {} ms, {} frame(s) abandonnée(s) (file pleine), \
+             {} attente(s) d'écran inaccessible",
             self.frames,
             self.convert_total_ms / self.frames as f64,
             self.stalls,
             STALL_MS,
             self.dropped,
+            self.access_waits,
         );
     }
 }
@@ -468,13 +487,13 @@ struct EncodeStats {
 
 impl EncodeStats {
     fn record(&mut self, ts_ms: u64, lock_ms: f64, t: EncodeTiming) {
-        let ms = lock_ms + t.send_ms + t.write_ms;
+        let ms = lock_ms + t.send_ms + t.receive_ms + t.write_ms;
         if ms > STALL_MS as f64 {
             self.slow += 1;
             log::warn!(
                 "Encodeur · appel lent de {ms:.0} ms pour t={ts_ms} ms (verrou {lock_ms:.0} ms, \
-                 send_frame {:.0} ms, écriture {:.0} ms)",
-                t.send_ms, t.write_ms,
+                 send_frame {:.0} ms, receive_packet {:.0} ms, écriture {:.0} ms)",
+                t.send_ms, t.receive_ms, t.write_ms,
             );
         }
         self.frames += 1;
@@ -515,6 +534,9 @@ struct AudioWorkerCtx {
     app: AppHandle,
 }
 
+/// Chunks de 10 ms gardés au plus en attendant l'encodeur (5 s).
+const PENDING_AUDIO_CHUNKS: usize = 500;
+
 fn run_audio_worker(ctx: AudioWorkerCtx) {
     if !ctx.mic_enabled && !ctx.loopback_enabled {
         log::info!("Worker audio · désactivé (mic et loopback OFF)");
@@ -545,17 +567,28 @@ fn run_audio_worker(ctx: AudioWorkerCtx) {
         capturer.has_mic(), capturer.has_loopback(), ctx.loopback_delay_ms,
     );
 
+    // L'encodeur naît avec la 1re frame vidéo, parfois une seconde après le
+    // début (ouverture de l'encodeur matériel ou x264) : les chunks arrivés
+    // avant attendent ici au lieu d'être jetés, sinon le MP4 commençait muet.
+    let mut pending: VecDeque<(Vec<f32>, u64)> = VecDeque::new();
+
     // Encode un chunk ; false si l'encodeur a échoué.
-    let push = |chunk: &[f32], pos_ms: u64| -> bool {
+    let mut push = |chunk: Vec<f32>, pos_ms: u64| -> bool {
         // Chunk tombant pendant une pause : jeté.
         let Some(ts_ms) = ctx.pause_timeline.media_ts(pos_ms) else { return true };
         let mut guard = match ctx.encoder_arc.lock() {
             Ok(g) => g,
             Err(p) => p.into_inner(),
         };
-        // Pas encore d'encodeur (il naît avec la 1re frame vidéo) : jeté.
-        if let Some(enc) = guard.as_mut() {
-            if let Err(e) = enc.push_audio_samples(chunk, ts_ms) {
+        let Some(enc) = guard.as_mut() else {
+            if pending.len() >= PENDING_AUDIO_CHUNKS {
+                pending.pop_front();
+            }
+            pending.push_back((chunk, ts_ms));
+            return true;
+        };
+        for (c, ts) in pending.drain(..).chain(std::iter::once((chunk, ts_ms))) {
+            if let Err(e) = enc.push_audio_samples(&c, ts) {
                 log::error!("push_audio_samples : {e}");
                 return false;
             }
@@ -568,7 +601,7 @@ fn run_audio_worker(ctx: AudioWorkerCtx) {
     while !ctx.stop_flag.load(Ordering::Relaxed) {
         std::thread::sleep(Duration::from_millis(10));
         while let Some((chunk, pos_ms)) = capturer.pull_chunk() {
-            if !push(&chunk, pos_ms) {
+            if !push(chunk, pos_ms) {
                 return;
             }
         }
@@ -582,7 +615,7 @@ fn run_audio_worker(ctx: AudioWorkerCtx) {
     'drain: while Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));
         while let Some((chunk, pos_ms)) = capturer.pull_chunk() {
-            if pos_ms >= stop_ms || !push(&chunk, pos_ms) {
+            if pos_ms >= stop_ms || !push(chunk, pos_ms) {
                 break 'drain;
             }
         }

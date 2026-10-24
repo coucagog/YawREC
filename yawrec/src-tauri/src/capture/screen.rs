@@ -75,6 +75,7 @@ pub struct NoopScreenCapturer;
 impl NoopScreenCapturer {
     pub fn set_acquire_timeout_ms(&mut self, _ms: u32) {}
     pub fn desktop_origin(&self) -> (i32, i32) { (0, 0) }
+    pub fn access_lost(&self) -> bool { false }
 }
 #[cfg(not(target_os = "windows"))]
 impl Capturer for NoopScreenCapturer {
@@ -396,6 +397,12 @@ pub mod windows_impl {
         /// Coin haut-gauche de l'écran capturé en coordonnées bureau.
         pub fn desktop_origin(&self) -> (i32, i32) {
             self.origin
+        }
+
+        /// Accès à l'écran perdu (bureau sécurisé UAC, Ctrl+Alt+Suppr) :
+        /// la dernière image est répétée en attendant la récupération.
+        pub fn access_lost(&self) -> bool {
+            self.access_lost_since.is_some()
         }
 
         fn duplicate(&mut self) -> Result<(), ScreenError> {
