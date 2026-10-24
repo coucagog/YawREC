@@ -1,7 +1,7 @@
 # =============================================================
 # YAWREC · workflow CI
 # À chaque push / pull request : tests Rust, build frontend et exécutable
-# portable téléchargeable (Windows) ; compilation de l'app Android.
+# portable téléchargeable (Windows) ; APK Android de test téléchargeable.
 # =============================================================
 name: CI
 
@@ -108,3 +108,13 @@ jobs:
 
       - name: Build debug APK
         run: gradle -p YawREC_mobile/android assembleDebug testDebugUnitTest
+
+      # APK de test (signé avec la clé debug) téléchargeable depuis la page
+      # du run : s'installe en autorisant les sources inconnues.
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: yawrec-android-debug-${{ github.sha }}
+          path: YawREC_mobile/android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
