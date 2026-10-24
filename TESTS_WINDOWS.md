@@ -8,6 +8,9 @@
    https://github.com/coucagog/YawREC/actions?query=branch%3Afix%2Frevue-complete
    → dernier run vert → section *Artifacts* → `yawrec-windows-portable-…` (≈ 70 Mo, conservé 14 jours).
 2. Dézipper dans un dossier : l'exe et les DLL FFmpeg doivent rester ensemble.
+   Prendre un dossier **hors de l'arborescence de build** (par exemple `C:\Users\<vous>\yawrec-test\`) :
+   le test E2E du 24/10 a montré qu'un exe lancé depuis `src-tauri\target\release` ne pouvait
+   ni écrire son journal ni créer sa WebView2 sur cette machine.
 3. Lancer `YawREC.exe`.
    - Exe non signé, SmartScreen bloque : *Informations complémentaires → Exécuter quand même*.
    - Pare-feu : autoriser les **réseaux privés** (nécessaire pour le téléphone).
@@ -41,7 +44,9 @@ Pour chaque test, noter **OK / KO**, avec un commentaire si KO.
 | 10 | **Dossier de sortie.** Le changer, puis relancer l'app. | Le dossier choisi est conservé. | |
 | 11 | **Téléphone.** Ouvrir le QR code, le scanner avec l'APK, puis démarrer / pause / arrêt depuis le téléphone. Couper ensuite le Wi-Fi du téléphone 10 s. | Ça se connecte, les commandes répondent et le chrono est à jour. Après la coupure, **la reconnexion est automatique**. | |
 | 12 | **Sécurité du téléphone.** Modifier une lettre du code d'appairage sur le téléphone. | Le message « Code d'appairage invalide » s'affiche et l'app ne réessaie pas en boucle. | |
-| 13 | **Matériel varié**, selon ce qui est disponible : casque Bluetooth, sortie 48 kHz, son 5.1, micro seul, son système seul. | Le son n'est ni accéléré, ni haché, ni muet. | |
+| 13 | **Instance unique.** YawREC ouvert, relancer `YawREC.exe` (double-clic). | La fenêtre existante revient au premier plan. Il n'y a qu'un seul `yawrec.exe` dans le Gestionnaire des tâches. | |
+| 14 | **Script automatique** (nécessite `ffprobe` dans le PATH). App fermée : `.\scripts\test_audio.ps1 -ExePath <dossier>\yawrec.exe` | 11/11, sur des MP4 créés pendant le test (le script ignore désormais les anciens fichiers). | |
+| 15 | **Matériel varié**, selon ce qui est disponible : casque Bluetooth, sortie 48 kHz, son 5.1, micro seul, son système seul. | Le son n'est ni accéléré, ni haché, ni muet. | |
 
 ## À renvoyer
 
