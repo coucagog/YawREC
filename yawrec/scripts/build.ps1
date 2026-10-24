@@ -72,6 +72,12 @@ try {
         Write-Host "✓ tauri CLI (npx tauri, cargo tauri absent)" -ForegroundColor Green
     }
 
+    # FFMPEG_DIR absent du shell mais FFmpeg à l'emplacement conseillé : on le prend.
+    if (-not $env:FFMPEG_DIR -and (Test-Path "C:\ffmpeg\include\libavcodec\avcodec.h")) {
+        $env:FFMPEG_DIR = "C:\ffmpeg"
+        $env:PATH = "$env:PATH;C:\ffmpeg\bin"
+        Write-Host "• FFMPEG_DIR non défini, C:\ffmpeg utilisé pour ce build" -ForegroundColor Yellow
+    }
     if (-not $env:FFMPEG_DIR) {
         Write-Host "✗ FFMPEG_DIR non défini" -ForegroundColor Red
         Write-Host "  → Télécharger ffmpeg-release-full-shared.7z depuis gyan.dev" -ForegroundColor Yellow
@@ -157,6 +163,13 @@ try {
     # PS 5.1 traite la stderr de cargo comme des erreurs avec ErrorActionPreference=Stop.
     # On relâche temporairement pour que cargo puisse écrire en stderr sans planter le script.
     $ErrorActionPreference = "Continue"
+    # Fichiers temporaires du compilateur dans target\tmp : dans %TEMP%, cl.exe
+    # lancé par un build script fraîchement compilé échouait (D8018, fichier
+    # réponse de l'éditeur de liens), sans doute bloqué par l'antivirus.
+    $savedTmp = $env:TMP; $savedTemp = $env:TEMP
+    $buildTmp = Join-Path $root "src-tauri\target\tmp"
+    New-Item -ItemType Directory -Force -Path $buildTmp | Out-Null
+    $env:TMP = $buildTmp; $env:TEMP = $buildTmp
     if ($BuildDebug) {
         Write-Host "═══ tauri build (DEBUG) ═══" -ForegroundColor Cyan
         & $tauriExe @tauriArgs build --debug
@@ -165,13 +178,14 @@ try {
         & $tauriExe @tauriArgs build
     }
     $buildExit = $LASTEXITCODE
+    $env:TMP = $savedTmp; $env:TEMP = $savedTemp
     $ErrorActionPreference = "Stop"
     if ($buildExit -ne 0) { throw "tauri build a échoué (code $buildExit)" }
 
     # =========================================================
     # Résultats
     # =========================================================
-    $target_dir = if ($Debug) {
+    $target_dir = if ($BuildDebug) {
         Join-Path $root "src-tauri\target\debug"
     } else {
         Join-Path $root "src-tauri\target\release"
