@@ -1,7 +1,7 @@
-# YawREC — squelette Tauri 2
+# YawREC — Tauri 2
 
 Mini enregistreur d'écran cross-plateforme. Cœur Rust, UI WebView2 (HTML/CSS/JS).
-Ce squelette cible Windows en priorité ; macOS/Linux suivront en réutilisant le même socle.
+L'application cible Windows en priorité ; macOS/Linux suivront en réutilisant le même socle.
 
 ## Architecture
 
@@ -13,7 +13,7 @@ yawrec/
 │   ├── recorder.js
 │   └── style.css
 ├── src-tauri/
-│   ├── Cargo.toml
+│   ├── Cargo.toml / Cargo.lock
 │   ├── tauri.conf.json
 │   ├── capabilities/
 │   └── src/
@@ -22,13 +22,15 @@ yawrec/
 │       ├── commands.rs    ← #[tauri::command] + worker thread écran
 │       ├── state.rs       ← état partagé (phase, timer, atomics, worker)
 │       ├── error.rs
+│       ├── ws_server.rs   ← télécommande WebSocket (jeton d'appairage)
 │       ├── capture/
 │       │   ├── mod.rs     ← trait Capturer + Frame
-│       │   ├── screen.rs  ← ✅ Windows.Graphics.Capture (D1+D2)
-│       │   ├── audio.rs   ← cpal (stubs)
-│       │   └── webcam.rs  ← nokhwa (stubs)
+│       │   ├── screen.rs  ← DXGI Desktop Duplication + curseur
+│       │   ├── window.rs  ← énumération / position des fenêtres
+│       │   ├── audio.rs   ← cpal micro + loopback, horloge murale
+│       │   └── webcam.rs  ← nokhwa (MediaFoundation)
 │       └── encoder/
-│           └── mod.rs     ← ✅ FFmpeg wrapper (E1) + détection HW (E2)
+│           └── mod.rs     ← FFmpeg (H.264 + AAC) + détection HW
 └── package.json
 ```
 
@@ -67,54 +69,70 @@ cargo tauri build
 
 Sortie release : `src-tauri/target/release/bundle/{nsis,msi}/`.
 
-## État du squelette
+## Fonctionnalités
 
-### ✅ Branché et fonctionnel
+- Fenêtre flottante 800×240, toujours au premier plan, tray icon
+  (Afficher / Démarrer-Arrêter / Quitter)
+- **Capture écran** DXGI Desktop Duplication :
+  - plein écran (choix de l'écran), **fenêtre** (suit les déplacements),
+    **région** (sélection à la souris, sur l'écran où se trouve le curseur) ;
+  - fenêtre et région fonctionnent sur un écran secondaire ;
+  - **curseur souris incrusté** dans la vidéo ;
+  - device D3D11 créé sur le GPU qui porte l'écran (PC portables à double GPU) ;
+  - reprise automatique après une perte d'accès (invite UAC, Ctrl+Alt+Suppr,
+    changement de résolution) pendant 30 s maximum.
+- **Cadence fixe** : la vidéo est encodée au FPS choisi (24/30/60…) quel que soit
+  le rafraîchissement de l'écran ; la dernière image est répétée quand l'écran
+  est statique (la webcam reste animée).
+- **Audio** micro + son système (loopback WASAPI), 48 kHz stéréo AAC :
+  - horloge murale commune avec la vidéo → pas de dérive, les silences du son
+    système sont comblés (le loopback WASAPI n'envoie rien quand rien ne joue) ;
+  - son système en stéréo (multicanal replié), micro replié en mono ;
+  - gain micro et VU-mètre en direct.
+- **Webcam** en incrustation (≈ 20 % de la largeur, 4 coins, recadrage 16:9 sans
+  déformation).
+- **Pause / reprise** identique depuis le bouton, le raccourci et le téléphone.
+- Encodeur matériel détecté automatiquement : NVENC → QuickSync → AMF → x264.
+- Fermer la fenêtre ou quitter pendant un enregistrement **finalise le MP4**
+  avant de sortir.
+- Une erreur de capture arrête proprement l'enregistrement (fichier partiel
+  conservé) et l'affiche dans l'UI.
+- Paramètres persistants (dossier de sortie, préfixe, qualité, sources…).
 
-- Fenêtre 800×240 Mica acrylique avec drag region
-- Boutons système (réduire / agrandir / fermer)
-- **D1** Énumération écrans (Monitor::enumerate)
-- **D2** Capture frames via Windows.Graphics.Capture (BGRA8)
-- **D3** Audio cpal — micro + loopback système (Windows), conversion vers
-  48 kHz stéréo f32, mixage par somme avec écrêtage, worker dédié
-- **D4** Webcam via `nokhwa` (MediaFoundation sur Windows) — énumération
-  + worker dédié qui capture en RGB, convertit/redimensionne en BGRA 400×225,
-  publie dans un buffer partagé. OFF par défaut (privacy first), toggle via
-  bouton webcam dans l'UI ou commande `set_webcam_enabled`.
-- **D5** Compositing PiP — la frame webcam est blittée en bas-droite de
-  chaque frame écran (marge 24px) avec une bordure blanche 2px,
-  avant push à l'encoder. Pas d'alpha blend (overwrite), ~22 MB/s de coût.
-- **E1** Pipeline FFmpeg : sws_scaler BGRA→YUV420P, mux MP4, flush propre
-- **E2** Détection automatique de l'encodeur matériel : NVENC → QuickSync
-  → AMF → x264. Résultat caché en OnceLock. Override : `YAWREC_FORCE_ENCODER=libx264`.
-- **E3 bis** Stream audio AAC (48 kHz stéréo, 128 kbps, FLTP planar) dans
-  le même MP4 ; framing AAC 1024 samples géré côté encoder
-- **F1** Raccourci global `Ctrl + Shift + R` — toggle recording
-  (start ou stop selon la phase) même quand la fenêtre n'a pas le focus
-- **F2** Dialog dossier de sortie (plugin-dialog)
-- **F3** Notifications système au start (« Enregistrement démarré ») et au
-  stop (« Fichier : <chemin> ») via tauri-plugin-notification
-- **F4** Tray icon avec menu : Afficher YawREC / Démarrer-Arrêter / Quitter
-  + clic gauche sur l'icône qui ramène la fenêtre devant
-- **G1** Build & packaging :
-  - `scripts/build.ps1` — pré-flight (Rust/Node/FFMPEG_DIR/icônes) + cargo tauri build
-  - `scripts/make-icons.ps1` — SVG source → toutes les tailles via cargo tauri icon
-  - `scripts/sign.ps1` — signing self-signed / thumbprint / PFX
-  - `.github/workflows/release.yml` — CI Windows automatique sur tag v*
-  - Installateurs MSI (WiX) + NSIS produits par défaut, langues fr-FR + en-US
-- Architecture : encoder partagé dans `Arc<Mutex<Option<Encoder>>>`,
-  trois workers (`yawrec-video-worker`, `yawrec-audio-worker`,
-  `yawrec-webcam-worker`) coordonnés via Arc<AtomicBool> stop_flag
-- Helpers `do_start_recording` / `do_stop_recording` / `do_toggle_recording`
-  partagés entre les commandes IPC, le raccourci F1 et le menu tray F4
-- Stop graceful complet (stop_flag + CaptureControl::stop + JoinHandle::join via spawn_blocking)
-- Tick loop 250 ms qui émet `recorder://tick`
+### Raccourcis globaux
+
+| Action | Raccourci |
+|---|---|
+| Démarrer / arrêter | `Ctrl + Shift + F9` |
+| Pause / reprise | `Ctrl + Shift + F10` |
+
+(Les anciens `Ctrl+Shift+R` / `Ctrl+Shift+P` étaient captés dans tout le système
+et volaient le rechargement forcé des navigateurs et la palette de VS Code.)
+
+### Télécommande depuis le téléphone
+
+L'app Android (`YawREC_mobile/android`) pilote le bureau via WebSocket
+(`ws://<ip>:9799`). Cliquer sur **Mobile** dans le footer affiche un QR code :
+il contient l'adresse **et un code d'appairage** exigé par le serveur. Le code
+est conservé dans le dossier de configuration de l'app (il ne change pas d'un
+lancement à l'autre) ; supprimer le fichier `remote_token` en génère un nouveau.
+Les connexions venant d'un navigateur (en-tête `Origin`) sont refusées.
+
+### Tests
+
+```powershell
+cd src-tauri
+cargo test      # tests unitaires : pauses, audio, curseur, crop/PiP, jeton…
+```
+
+La CI (`.github/workflows/ci.yml` à la racine du dépôt) lance ces tests, le
+build du frontend et la compilation de l'app Android à chaque push.
 
 ### 🚧 À faire
 
-- Dropdowns dans l'UI pour choisir le device audio / la webcam / l'écran
-  (les énumérations Rust sont déjà là, il manque juste l'UI de sélection)
 - Acheter un cert CodeSigning EV pour distribuer sans warning SmartScreen
+- macOS / Linux : capture écran et webcam (stubs pour l'instant)
+- Android : incrustation caméra
 
 ---
 
@@ -163,7 +181,7 @@ au fur et à mesure que des utilisateurs cliquent « Exécuter quand même »).
 
 ### CI automatique sur GitHub
 
-`.github/workflows/release.yml` se déclenche sur push de tag `v*.*.*`.
+`.github/workflows/release.yml` (à la racine du dépôt) se déclenche sur push de tag `v*.*.*`.
 Il installe FFmpeg dev libs depuis GyanD/codexffmpeg, build, signe
 si les secrets `WINDOWS_PFX_BASE64` et `WINDOWS_PFX_PASSWORD` sont
 définis, et crée une release draft GitHub avec les artefacts.
@@ -180,9 +198,8 @@ $pfx_b64 | clip
 
 ```powershell
 # Bumper la version dans :
-#   - src-tauri/tauri.conf.json (version)
+#   - package.json              (version — relue par tauri.conf.json)
 #   - src-tauri/Cargo.toml      (version)
-#   - package.json              (version)
 
 git commit -am "v0.2.0"
 git tag v0.2.0
@@ -270,21 +287,7 @@ cargo tauri dev
 Si l'encoder HW est utilisé, le Task Manager doit montrer une activité GPU
 "Video Encode" sur l'onglet Performance pendant l'enregistrement.
 
-## Roadmap actualisée
-
-| # | Phase | État |
-|---|---|---|
-| B-C | Projet Tauri + IPC | ✅ |
-| D1-D2 | Capture écran Windows | ✅ |
-| D3 | Audio cpal | 🚧 énumération faite |
-| D4 | Webcam nokhwa | 🚧 stub |
-| D5 | Compositing PiP | 🚧 |
-| **E1** | **FFmpeg wrapper + mux MP4** | ✅ |
-| **E2** | **HW accel NVENC/QSV/AMF** | ✅ |
-| E3 bis | Stream audio AAC | 🚧 attend D3 |
-| F1-F4 | Raccourci/dialog/notif/tray | 🚧 |
-| G1-G3 | Build & sign | ⏳ |
-
 ## Licence
 
-GPL-3.0 (à confirmer).
+GPL-3.0 (voir `LICENSE`). Le build FFmpeg utilisé (Gyan « full ») inclut x264,
+sous GPL : l'application distribuée doit donc rester sous GPL.
