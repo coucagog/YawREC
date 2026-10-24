@@ -4,8 +4,12 @@
 
 # --- Rust / Cargo ---
 src-tauri/target/
-src-tauri/Cargo.lock
+# Cargo.lock est versionné : c'est une application, les builds doivent être
+# reproductibles (sans lui, la résolution des features du crate `windows`
+# dépendait des versions tirées au moment du build).
 src-tauri/gen/
+# DLL FFmpeg copiées par build.rs au moment du build
+src-tauri/resources/ffmpeg-dlls/
 
 # --- Node / Vite ---
 node_modules/
