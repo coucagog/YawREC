@@ -73,6 +73,9 @@ pub enum RecordingPhase {
 
 /// Retard maximal du son système, en ms.
 pub const LOOPBACK_DELAY_MAX_MS: u32 = 500;
+/// Valeur par défaut du retard du son système, mesurée sous Windows 11
+/// (navigateur → loopback WASAPI / DXGI : son en avance de ~50 ms).
+pub const LOOPBACK_DELAY_DEFAULT_MS: u32 = 50;
 
 pub struct RecorderState {
     pub phase: RecordingPhase,
@@ -128,8 +131,9 @@ pub struct RecorderState {
     /// Retard appliqué au son système (ms), lu au démarrage d'un
     /// enregistrement. Le loopback capte le son avant la latence de sortie,
     /// alors qu'un lecteur (navigateur…) cale l'image sur le son entendu :
-    /// sans correction, le son système arrive en avance (~115 ms mesurés
-    /// avec Chrome). Voir [`LOOPBACK_DELAY_MAX_MS`].
+    /// sans correction, le son système arrive en avance (~50 ms mesurés
+    /// avec un fichier de référence lu dans le navigateur). Voir
+    /// [`LOOPBACK_DELAY_DEFAULT_MS`] et [`LOOPBACK_DELAY_MAX_MS`].
     pub loopback_delay_ms: u32,
     /// Niveau RMS du micro (f32 bits, 0.0–1.0). Mis à jour par l'AudioMonitor
     /// (repos) ou le worker audio (enregistrement). Lu par la boucle tick → VU.
@@ -173,7 +177,7 @@ impl Default for RecorderState {
             pip_buffer: None,
             pip_position: Arc::new(AtomicU8::new(PipPosition::BottomRight.to_u8())),
             mic_gain:  Arc::new(AtomicU32::new(1.0f32.to_bits())),
-            loopback_delay_ms: 0,
+            loopback_delay_ms: LOOPBACK_DELAY_DEFAULT_MS,
             mic_level: Arc::new(AtomicU32::new(0f32.to_bits())),
             mic_monitor_stop:   Arc::new(AtomicBool::new(false)),
             mic_monitor_handle: None,

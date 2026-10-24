@@ -223,9 +223,9 @@ const _savedGain = parseFloat(localStorage.getItem("yawrec_mic_gain"));
 let micGain = isFinite(_savedGain) && _savedGain >= 0 ? _savedGain : 1.0;
 
 // Retard du son système (ms) : le loopback capte le son avant la latence de
-// sortie, alors qu'un navigateur cale l'image sur le son entendu.
+// sortie, alors qu'un navigateur cale l'image sur le son entendu (~50 ms).
 const _savedDelay = parseInt(localStorage.getItem("yawrec_loopback_delay"), 10);
-let loopbackDelayMs = isFinite(_savedDelay) && _savedDelay >= 0 ? Math.min(_savedDelay, 500) : 0;
+let loopbackDelayMs = isFinite(_savedDelay) && _savedDelay >= 0 ? Math.min(_savedDelay, 500) : 50;
 
 document.getElementById("audio-control").addEventListener("click", async (e) => {
   if (currentPopover === "popover-audio") {
@@ -306,7 +306,12 @@ function setLoopbackDelayRowVisible(visible) {
   document.getElementById("loopback-delay-row").classList.toggle("hidden", !visible);
 }
 
-document.getElementById("loopback-delay-slider").addEventListener("input", async (e) => {
+// Libellé suivi en direct ; valeur envoyée au relâchement du curseur, car
+// les appels émis à chaque pas pouvaient arriver dans le désordre.
+document.getElementById("loopback-delay-slider").addEventListener("input", (e) => {
+  updateLoopbackDelayLabel(parseInt(e.target.value, 10));
+});
+document.getElementById("loopback-delay-slider").addEventListener("change", async (e) => {
   loopbackDelayMs = parseInt(e.target.value, 10);
   localStorage.setItem("yawrec_loopback_delay", String(loopbackDelayMs));
   updateLoopbackDelayLabel(loopbackDelayMs);
