@@ -53,7 +53,10 @@ const fn ms_to_frames(ms: u64) -> u64 { TARGET_SAMPLE_RATE as u64 * ms / 1000 }
 /// Retard d'émission : on émet l'audio de (maintenant − OUTPUT_DELAY), ce qui
 /// laisse aux callbacks le temps d'arriver. Il n'affecte pas la synchro A/V :
 /// chaque chunk porte sa position dans le temps.
-const OUTPUT_DELAY_FRAMES: u64 = ms_to_frames(250);
+const OUTPUT_DELAY_MS: u64 = 250;
+const OUTPUT_DELAY_FRAMES: u64 = ms_to_frames(OUTPUT_DELAY_MS);
+/// Retard d'émission, exposé pour que le worker vide le tampon à l'arrêt.
+pub const OUTPUT_DELAY: std::time::Duration = std::time::Duration::from_millis(OUTPUT_DELAY_MS);
 /// Au-delà de cet écart entre la fin des données d'une source et l'instant
 /// du callback, on considère qu'il y a eu un trou (silence loopback).
 const GAP_TOLERANCE_FRAMES: u64 = ms_to_frames(100);

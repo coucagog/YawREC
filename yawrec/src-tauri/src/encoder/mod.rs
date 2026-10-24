@@ -127,6 +127,11 @@ impl VideoEncoder {
             VideoEncoder::X264 => vec![
                 ("preset",  "veryfast"),
                 ("profile", "high"),
+                // Via l'API, libavcodec ouvre x264 avec 1 seul thread (c'est
+                // la CLI ffmpeg qui passe en « auto ») : en 1080p sur un
+                // 4 cœurs sans encodeur matériel, ça plafonnait à ~20 fps
+                // et bloquait la boucle de capture (gels de 0,5 à 1,6 s).
+                ("threads", "auto"),
             ],
             VideoEncoder::H264Nvenc => vec![
                 ("preset",  "p4"),

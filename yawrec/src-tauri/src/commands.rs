@@ -246,8 +246,10 @@ fn video_loop(ctx: &VideoWorkerCtx) -> Option<String> {
     let mut next_due = 0.0f64;
     let mut last_base: Option<Frame> = None;
     let mut fatal = None;
+    let mut stats = LoopStats::default();
 
     while !ctx.stop_flag.load(Ordering::Relaxed) {
+        let t_capture = Instant::now();
         let fresh = match capturer.next_frame() {
             Ok(f) => f,
             Err(e) => { fatal = Some(format!("Capture frame : {e}")); break; }
@@ -283,22 +285,28 @@ fn video_loop(ctx: &VideoWorkerCtx) -> Option<String> {
             next_due = ts_ms as f64 + interval_ms;
         }
 
-        let mut out = base.data.clone();
+        let capture_ms = t_capture.elapsed().as_secs_f64() * 1000.0;
 
-        // D5 — composite PiP avant encodage
-        if let Some(pip_arc) = &ctx.pip_buffer {
-            if let Ok(guard) = pip_arc.lock() {
-                if let Some(pip) = guard.as_ref() {
-                    let pos = PipPosition::from_u8(ctx.pip_position.load(Ordering::Relaxed));
-                    composite_pip(&mut out, base.width, base.height, pip, ctx.pip_margin, pos);
-                }
+        // D5 — composite PiP avant encodage. Sans webcam, l'image capturée
+        // est encodée telle quelle (pas de copie de 8 Mo par frame en 1080p).
+        let pip_guard = ctx.pip_buffer.as_ref().and_then(|a| a.lock().ok());
+        let out: std::borrow::Cow<'_, [u8]> = match pip_guard.as_ref().and_then(|g| g.as_ref()) {
+            Some(pip) => {
+                let mut buf = base.data.clone();
+                let pos = PipPosition::from_u8(ctx.pip_position.load(Ordering::Relaxed));
+                composite_pip(&mut buf, base.width, base.height, pip, ctx.pip_margin, pos);
+                std::borrow::Cow::Owned(buf)
             }
-        }
+            None => std::borrow::Cow::Borrowed(&base.data),
+        };
+        drop(pip_guard);
 
+        let t_lock = Instant::now();
         let mut guard = match ctx.encoder_arc.lock() {
             Ok(g) => g,
             Err(p) => p.into_inner(),
         };
+        let lock_ms = t_lock.elapsed().as_secs_f64() * 1000.0;
 
         if guard.is_none() {
             let config = EncoderConfig {
@@ -317,19 +325,77 @@ fn video_loop(ctx: &VideoWorkerCtx) -> Option<String> {
         }
 
         let enc = guard.as_mut().expect("encoder initialisé");
+        let t_encode = Instant::now();
         if let Err(e) = enc.push_video_frame(&out, base.width, base.height, ts_ms) {
             fatal = Some(format!("Encodage vidéo : {e}"));
             break;
         }
+        let encode_ms = t_encode.elapsed().as_secs_f64() * 1000.0;
 
         ctx.frame_count.fetch_add(1, Ordering::Relaxed);
         ctx.byte_count.store(enc.bytes_written(), Ordering::Relaxed);
+        drop(guard);
+        stats.record(ts_ms, interval_ms, capture_ms, lock_ms, encode_ms);
     }
+    stats.log_summary();
 
     if let Err(e) = capturer.stop() {
         log::warn!("capturer.stop() : {e}");
     }
     fatal
+}
+
+/// Mesures de la boucle vidéo, pour diagnostiquer les gels d'image : un
+/// écart entre deux frames encodées bien au-delà de l'intervalle cible est
+/// journalisé avec le détail capture / verrou encodeur / encodage.
+#[derive(Default)]
+struct LoopStats {
+    frames: u64,
+    last_ts: Option<u64>,
+    /// Durée d'encodage de la frame précédente : un gel entre deux frames
+    /// = encodage de la précédente + capture et verrou de la courante.
+    prev_encode_ms: f64,
+    stalls: u64,
+    encode_total_ms: f64,
+    encode_max_ms: f64,
+}
+
+impl LoopStats {
+    /// Écart au-delà duquel une frame encodée compte comme un gel.
+    const STALL_MS: u64 = 200;
+
+    fn record(&mut self, ts_ms: u64, interval_ms: f64, capture_ms: f64, lock_ms: f64, encode_ms: f64) {
+        if let Some(last) = self.last_ts {
+            let gap = ts_ms.saturating_sub(last);
+            if gap > Self::STALL_MS.max(interval_ms as u64 * 3) {
+                self.stalls += 1;
+                log::warn!(
+                    "Vidéo · gel de {gap} ms à t={ts_ms} ms : encodage frame précédente {:.0} ms, \
+                     puis capture {capture_ms:.0} ms, verrou encodeur {lock_ms:.0} ms",
+                    self.prev_encode_ms,
+                );
+            }
+        }
+        self.last_ts = Some(ts_ms);
+        self.prev_encode_ms = encode_ms;
+        self.frames += 1;
+        self.encode_total_ms += encode_ms;
+        self.encode_max_ms = self.encode_max_ms.max(encode_ms);
+    }
+
+    fn log_summary(&self) {
+        if self.frames == 0 {
+            return;
+        }
+        log::info!(
+            "Vidéo · {} frames, encodage moyen {:.1} ms (max {:.0} ms), {} gel(s) > {} ms",
+            self.frames,
+            self.encode_total_ms / self.frames as f64,
+            self.encode_max_ms,
+            self.stalls,
+            Self::STALL_MS,
+        );
+    }
 }
 
 // ============================================================
@@ -375,25 +441,45 @@ fn run_audio_worker(ctx: AudioWorkerCtx) {
 
     log::info!("Audio sources : micro={}, loopback={}", capturer.has_mic(), capturer.has_loopback());
 
+    // Encode un chunk ; false si l'encodeur a échoué.
+    let push = |chunk: &[f32], pos_ms: u64| -> bool {
+        // Chunk tombant pendant une pause : jeté.
+        let Some(ts_ms) = ctx.pause_timeline.media_ts(pos_ms) else { return true };
+        let mut guard = match ctx.encoder_arc.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        // Pas encore d'encodeur (il naît avec la 1re frame vidéo) : jeté.
+        if let Some(enc) = guard.as_mut() {
+            if let Err(e) = enc.push_audio_samples(chunk, ts_ms) {
+                log::error!("push_audio_samples : {e}");
+                return false;
+            }
+        }
+        true
+    };
+
     // pull_chunk est cadencé sur l'horloge murale : on le sollicite souvent
     // et il n'émet que les chunks dus.
     while !ctx.stop_flag.load(Ordering::Relaxed) {
         std::thread::sleep(Duration::from_millis(10));
-
         while let Some((chunk, pos_ms)) = capturer.pull_chunk() {
-            // Chunk tombant pendant une pause : jeté.
-            let Some(ts_ms) = ctx.pause_timeline.media_ts(pos_ms) else { continue };
+            if !push(&chunk, pos_ms) {
+                return;
+            }
+        }
+    }
 
-            let mut guard = match ctx.encoder_arc.lock() {
-                Ok(g) => g,
-                Err(p) => p.into_inner(),
-            };
-            // Pas encore d'encodeur (il naît avec la 1re frame vidéo) : jeté.
-            if let Some(enc) = guard.as_mut() {
-                if let Err(e) = enc.push_audio_samples(&chunk, ts_ms) {
-                    log::error!("push_audio_samples : {e}");
-                    return;
-                }
+    // L'audio sort avec OUTPUT_DELAY de retard : sans cette vidange, les
+    // ~250 dernières ms avant l'arrêt étaient perdues (piste audio plus
+    // courte que la vidéo). On émet jusqu'à l'instant de l'arrêt.
+    let stop_ms = ctx.epoch.elapsed().as_millis() as u64;
+    let deadline = Instant::now() + crate::capture::audio::OUTPUT_DELAY + Duration::from_millis(200);
+    'drain: while Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+        while let Some((chunk, pos_ms)) = capturer.pull_chunk() {
+            if pos_ms >= stop_ms || !push(&chunk, pos_ms) {
+                break 'drain;
             }
         }
     }
