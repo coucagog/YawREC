@@ -214,15 +214,101 @@ impl Default for EncoderConfig {
 // Encoder
 // ============================================================
 
-struct VideoTrack {
-    encoder: ff_encoder::Video,
-    /// Scaler BGRA (taille source) → YUV420P (taille encodeur). Recréé si
-    /// la taille des frames source change (ex. changement de résolution).
+/// Conversion BGRA (taille source) → YUV420P (taille encodeur). Séparée de
+/// l'[`Encoder`] pour tourner dans le thread de capture : l'encodeur, lui,
+/// vit dans un thread dédié où une lenteur (x264, écriture disque) ne bloque
+/// plus la capture.
+pub struct FrameConverter {
+    /// Recréé si la taille des frames source change (ex. changement de résolution).
     scaler: scaling::Context,
     bgra_frame: frame::Video,
-    yuv_frame: frame::Video,
     src_w: u32,
     src_h: u32,
+    out_w: u32,
+    out_h: u32,
+}
+
+impl FrameConverter {
+    pub fn new(out_w: u32, out_h: u32) -> Result<Self, EncoderError> {
+        ffmpeg::init().map_err(EncoderError::Ffmpeg)?;
+        Ok(Self {
+            scaler: Self::make_scaler(out_w, out_h, out_w, out_h)?,
+            bgra_frame: frame::Video::new(format::Pixel::BGRA, out_w, out_h),
+            src_w: out_w,
+            src_h: out_h,
+            out_w,
+            out_h,
+        })
+    }
+
+    fn make_scaler(src_w: u32, src_h: u32, out_w: u32, out_h: u32) -> Result<scaling::Context, EncoderError> {
+        scaling::Context::get(
+            format::Pixel::BGRA,    src_w, src_h,
+            format::Pixel::YUV420P, out_w, out_h,
+            scaling::Flags::BILINEAR,
+        ).map_err(EncoderError::Ffmpeg)
+    }
+
+    /// Convertit une frame BGRA8 packée de taille `src_w`×`src_h` ; si elle
+    /// diffère de la taille de sortie, elle est mise à l'échelle.
+    pub fn convert(&mut self, bgra: &[u8], src_w: u32, src_h: u32) -> Result<YuvFrame, EncoderError> {
+        if src_w != self.src_w || src_h != self.src_h {
+            log::info!(
+                "Encoder · taille source {}×{} → {}×{} (mise à l'échelle vers {}×{})",
+                self.src_w, self.src_h, src_w, src_h, self.out_w, self.out_h,
+            );
+            self.scaler = Self::make_scaler(src_w, src_h, self.out_w, self.out_h)?;
+            self.bgra_frame = frame::Video::new(format::Pixel::BGRA, src_w, src_h);
+            self.src_w = src_w;
+            self.src_h = src_h;
+        }
+
+        let stride    = self.bgra_frame.stride(0);
+        let row_bytes = (src_w as usize) * 4;
+        let expected  = row_bytes * src_h as usize;
+
+        if bgra.len() < expected {
+            return Err(EncoderError::Encoding(format!(
+                "Buffer vidéo trop petit : {} < {}", bgra.len(), expected
+            )));
+        }
+
+        let dst = self.bgra_frame.data_mut(0);
+        if stride == row_bytes {
+            dst[..expected].copy_from_slice(&bgra[..expected]);
+        } else {
+            for y in 0..src_h as usize {
+                let src_off = y * row_bytes;
+                let dst_off = y * stride;
+                dst[dst_off..dst_off + row_bytes]
+                    .copy_from_slice(&bgra[src_off..src_off + row_bytes]);
+            }
+        }
+
+        let mut yuv = frame::Video::new(format::Pixel::YUV420P, self.out_w, self.out_h);
+        self.scaler.run(&self.bgra_frame, &mut yuv).map_err(EncoderError::Ffmpeg)?;
+        Ok(yuv)
+    }
+}
+
+// SAFETY : le scaler n'est utilisé que par le thread qui possède le
+// FrameConverter (pas de partage), comme pour l'Encoder.
+unsafe impl Send for FrameConverter {}
+
+/// Frame YUV420P prête pour [`Encoder::push_yuv_frame`].
+pub type YuvFrame = frame::Video;
+
+/// Durées d'un [`Encoder::push_yuv_frame`], pour diagnostiquer les gels.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct EncodeTiming {
+    /// avcodec_send_frame (x264 : encodage / attente de ses threads).
+    pub send_ms: f64,
+    /// Réception des paquets + écriture dans le MP4.
+    pub write_ms: f64,
+}
+
+struct VideoTrack {
+    encoder: ff_encoder::Video,
     frame_index: i64,
     last_pts: Option<i64>,
     stream_idx: usize,
@@ -245,8 +331,6 @@ pub struct Encoder {
     video: VideoTrack,
     audio: Option<AudioTrack>,
 
-    width: u32,
-    height: u32,
     fps: u32,
     audio_sample_rate: u32,
 
@@ -276,21 +360,8 @@ impl Encoder {
             open_video_encoder(config.video_encoder, &config, global_header)?;
         let video_stream_idx = add_stream_with_params(&mut octx, &video_encoder, used_video.ffmpeg_name(), config.fps as i32)?;
 
-        let bgra_frame = frame::Video::new(format::Pixel::BGRA, config.width, config.height);
-        let yuv_frame  = frame::Video::new(format::Pixel::YUV420P, config.width, config.height);
-        let scaler = scaling::Context::get(
-            format::Pixel::BGRA,    config.width, config.height,
-            format::Pixel::YUV420P, config.width, config.height,
-            scaling::Flags::BILINEAR,
-        ).map_err(EncoderError::Ffmpeg)?;
-
         let video = VideoTrack {
             encoder: video_encoder,
-            scaler,
-            bgra_frame,
-            yuv_frame,
-            src_w: config.width,
-            src_h: config.height,
             frame_index: 0,
             last_pts: None,
             stream_idx: video_stream_idx,
@@ -330,8 +401,6 @@ impl Encoder {
             octx,
             video,
             audio,
-            width: config.width,
-            height: config.height,
             fps: config.fps,
             audio_sample_rate: config.audio_sample_rate,
             bytes_written: 0,
@@ -343,73 +412,32 @@ impl Encoder {
     // ---------------------------------------------------------
     // Vidéo
     // ---------------------------------------------------------
-    /// Pousse une frame BGRA8 packée de taille `src_w`×`src_h`. Si elle
-    /// diffère de la taille de l'encodeur, elle est mise à l'échelle.
-    /// Les timestamps non croissants sont ignorés (le muxer les refuserait).
-    pub fn push_video_frame(
-        &mut self,
-        bgra: &[u8],
-        src_w: u32,
-        src_h: u32,
-        timestamp_ms: u64,
-    ) -> Result<(), EncoderError> {
+    /// Encode une frame YUV420P à la taille de l'encodeur (voir
+    /// [`FrameConverter`]). Les timestamps non croissants sont ignorés (le
+    /// muxer les refuserait).
+    pub fn push_yuv_frame(&mut self, mut yuv: YuvFrame, timestamp_ms: u64) -> Result<EncodeTiming, EncoderError> {
         if self.finished {
             return Err(EncoderError::Encoding("Encoder déjà fermé".into()));
         }
         let pts = timestamp_ms as i64;
         if self.video.last_pts.is_some_and(|last| pts <= last) {
-            return Ok(());
+            return Ok(EncodeTiming::default());
         }
 
-        if src_w != self.video.src_w || src_h != self.video.src_h {
-            log::info!(
-                "Encoder · taille source {}×{} → {}×{} (mise à l'échelle vers {}×{})",
-                self.video.src_w, self.video.src_h, src_w, src_h, self.width, self.height,
-            );
-            self.video.scaler = scaling::Context::get(
-                format::Pixel::BGRA,    src_w, src_h,
-                format::Pixel::YUV420P, self.width, self.height,
-                scaling::Flags::BILINEAR,
-            ).map_err(EncoderError::Ffmpeg)?;
-            self.video.bgra_frame = frame::Video::new(format::Pixel::BGRA, src_w, src_h);
-            self.video.src_w = src_w;
-            self.video.src_h = src_h;
-        }
-
-        let stride    = self.video.bgra_frame.stride(0);
-        let row_bytes = (src_w as usize) * 4;
-        let expected  = row_bytes * src_h as usize;
-
-        if bgra.len() < expected {
-            return Err(EncoderError::Encoding(format!(
-                "Buffer vidéo trop petit : {} < {}", bgra.len(), expected
-            )));
-        }
-
-        let dst = self.video.bgra_frame.data_mut(0);
-        if stride == row_bytes {
-            dst[..expected].copy_from_slice(&bgra[..expected]);
-        } else {
-            for y in 0..src_h as usize {
-                let src_off = y * row_bytes;
-                let dst_off = y * stride;
-                dst[dst_off..dst_off + row_bytes]
-                    .copy_from_slice(&bgra[src_off..src_off + row_bytes]);
-            }
-        }
-
-        self.video.scaler.run(&self.video.bgra_frame, &mut self.video.yuv_frame)
-            .map_err(EncoderError::Ffmpeg)?;
-
-        self.video.yuv_frame.set_pts(Some(pts));
+        yuv.set_pts(Some(pts));
         self.video.last_pts = Some(pts);
         self.video.frame_index += 1;
 
-        self.video.encoder.send_frame(&self.video.yuv_frame)
+        let t_send = std::time::Instant::now();
+        self.video.encoder.send_frame(&yuv)
             .map_err(EncoderError::Ffmpeg)?;
-
+        let t_write = std::time::Instant::now();
         self.drain_video_packets()?;
-        Ok(())
+
+        Ok(EncodeTiming {
+            send_ms: (t_write - t_send).as_secs_f64() * 1000.0,
+            write_ms: t_write.elapsed().as_secs_f64() * 1000.0,
+        })
     }
 
     fn drain_video_packets(&mut self) -> Result<(), EncoderError> {

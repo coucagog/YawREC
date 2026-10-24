@@ -25,7 +25,7 @@ use crate::capture::audio::AudioCapturer;
 use crate::capture::webcam::PipLayout;
 use crate::capture::window::WindowInfo;
 use crate::capture::{audio, screen, webcam, window, Frame};
-use crate::encoder::{Encoder, EncoderConfig, VideoEncoder};
+use crate::encoder::{EncodeTiming, Encoder, EncoderConfig, FrameConverter, VideoEncoder, YuvFrame};
 use crate::error::{YawrecError, YawrecResult};
 use crate::state::{CaptureMode, PauseTimeline, PipPosition, RecorderState, RecordingPhase};
 
@@ -225,7 +225,21 @@ fn run_video_worker(ctx: VideoWorkerCtx) {
     log::info!("Worker vidéo · terminé (frames={})", ctx.frame_count.load(Ordering::Relaxed));
 }
 
+/// Profondeur de la file capture → encodage : ~2 s à 30 fps. Une frame
+/// YUV420P 1080p pèse ~3 Mo, soit ~190 Mo au pire, seulement pendant un
+/// ralentissement de l'encodeur ; au-delà, les frames sont abandonnées.
+const VIDEO_QUEUE_FRAMES: usize = 60;
+
+/// Frame convertie, horodatée à la capture, en attente d'encodage.
+type QueuedFrame = (YuvFrame, u64);
+
 /// Boucle de capture. Retourne Some(message) en cas d'erreur fatale.
+///
+/// La capture et la conversion BGRA → YUV restent ici ; l'encodage et
+/// l'écriture du MP4 tournent dans un thread dédié ([`encode_loop`]). Un appel
+/// d'encodage pouvait bloquer plus d'une seconde (constaté avec x264 sur un
+/// 4 cœurs), ce qui figeait l'image : désormais la capture continue, et les
+/// frames gardent l'horodatage de leur capture en attendant dans la file.
 fn video_loop(ctx: &VideoWorkerCtx) -> Option<String> {
     use crate::capture::Capturer;
 
@@ -245,8 +259,23 @@ fn video_loop(ctx: &VideoWorkerCtx) -> Option<String> {
     capturer.set_acquire_timeout_ms((interval_ms.ceil() as u32).clamp(5, 100));
     let mut next_due = 0.0f64;
     let mut last_base: Option<Frame> = None;
+    let mut converter: Option<FrameConverter> = None;
     let mut fatal = None;
-    let mut stats = LoopStats::default();
+    let mut stats = CaptureStats::default();
+
+    let (tx, rx) = std::sync::mpsc::sync_channel::<QueuedFrame>(VIDEO_QUEUE_FRAMES);
+    let encode_thread = {
+        let encoder_arc = ctx.encoder_arc.clone();
+        let frame_count = ctx.frame_count.clone();
+        let byte_count = ctx.byte_count.clone();
+        std::thread::Builder::new()
+            .name("yawrec-video-encode".into())
+            .spawn(move || encode_loop(rx, encoder_arc, frame_count, byte_count))
+    };
+    let encode_thread = match encode_thread {
+        Ok(h) => h,
+        Err(e) => return Some(format!("Thread d'encodage : {e}")),
+    };
 
     while !ctx.stop_flag.load(Ordering::Relaxed) {
         let t_capture = Instant::now();
@@ -284,11 +313,34 @@ fn video_loop(ctx: &VideoWorkerCtx) -> Option<String> {
         if next_due < ts_ms as f64 {
             next_due = ts_ms as f64 + interval_ms;
         }
-
         let capture_ms = t_capture.elapsed().as_secs_f64() * 1000.0;
 
-        // D5 — composite PiP avant encodage. Sans webcam, l'image capturée
-        // est encodée telle quelle (pas de copie de 8 Mo par frame en 1080p).
+        // Encodeur et convertisseur créés à la 1re frame (dimensions connues).
+        if converter.is_none() {
+            // H.264 4:2:0 exige des dimensions paires.
+            let (w, h) = (base.width & !1, base.height & !1);
+            let config = EncoderConfig {
+                output_path: ctx.output_path.clone(),
+                width: w,
+                height: h,
+                fps: ctx.video_fps,
+                bitrate_kbps: ctx.video_bitrate_kbps,
+                ..Default::default()
+            };
+            let created = Encoder::new(config).and_then(|e| Ok((e, FrameConverter::new(w, h)?)));
+            match created {
+                Ok((enc, conv)) => {
+                    *ctx.encoder_arc.lock().unwrap_or_else(|p| p.into_inner()) = Some(enc);
+                    converter = Some(conv);
+                }
+                Err(e) => { fatal = Some(format!("Encodeur : {e}")); break; }
+            }
+        }
+        let conv = converter.as_mut().expect("convertisseur initialisé");
+
+        // D5 — composite PiP avant conversion. Sans webcam, l'image capturée
+        // est convertie telle quelle (pas de copie de 8 Mo par frame en 1080p).
+        let t_convert = Instant::now();
         let pip_guard = ctx.pip_buffer.as_ref().and_then(|a| a.lock().ok());
         let out: std::borrow::Cow<'_, [u8]> = match pip_guard.as_ref().and_then(|g| g.as_ref()) {
             Some(pip) => {
@@ -300,87 +352,93 @@ fn video_loop(ctx: &VideoWorkerCtx) -> Option<String> {
             None => std::borrow::Cow::Borrowed(&base.data),
         };
         drop(pip_guard);
-
-        let t_lock = Instant::now();
-        let mut guard = match ctx.encoder_arc.lock() {
-            Ok(g) => g,
-            Err(p) => p.into_inner(),
+        let yuv = match conv.convert(&out, base.width, base.height) {
+            Ok(f) => f,
+            Err(e) => { fatal = Some(format!("Conversion vidéo : {e}")); break; }
         };
-        let lock_ms = t_lock.elapsed().as_secs_f64() * 1000.0;
+        let convert_ms = t_convert.elapsed().as_secs_f64() * 1000.0;
 
-        if guard.is_none() {
-            let config = EncoderConfig {
-                output_path: ctx.output_path.clone(),
-                // H.264 4:2:0 exige des dimensions paires.
-                width: base.width & !1,
-                height: base.height & !1,
-                fps: ctx.video_fps,
-                bitrate_kbps: ctx.video_bitrate_kbps,
-                ..Default::default()
-            };
-            match Encoder::new(config) {
-                Ok(e) => *guard = Some(e),
-                Err(e) => { fatal = Some(format!("Encodeur : {e}")); break; }
-            }
+        match tx.try_send((yuv, ts_ms)) {
+            Ok(()) => {}
+            Err(std::sync::mpsc::TrySendError::Full(_)) => stats.dropped += 1,
+            // Le thread d'encodage s'est arrêté sur une erreur : on la récupère au join.
+            Err(std::sync::mpsc::TrySendError::Disconnected(_)) => break,
         }
-
-        let enc = guard.as_mut().expect("encoder initialisé");
-        let t_encode = Instant::now();
-        if let Err(e) = enc.push_video_frame(&out, base.width, base.height, ts_ms) {
-            fatal = Some(format!("Encodage vidéo : {e}"));
-            break;
-        }
-        let encode_ms = t_encode.elapsed().as_secs_f64() * 1000.0;
-
-        ctx.frame_count.fetch_add(1, Ordering::Relaxed);
-        ctx.byte_count.store(enc.bytes_written(), Ordering::Relaxed);
-        drop(guard);
-        stats.record(ts_ms, interval_ms, capture_ms, lock_ms, encode_ms);
+        stats.record(ts_ms, interval_ms, capture_ms, convert_ms);
     }
+
+    // Fin de file : le thread d'encodage vide ce qui reste puis s'arrête.
+    drop(tx);
+    let encode_error = encode_thread.join().unwrap_or_else(|_| Some("thread d'encodage paniqué".into()));
     stats.log_summary();
 
     if let Err(e) = capturer.stop() {
         log::warn!("capturer.stop() : {e}");
     }
-    fatal
+    fatal.or(encode_error)
 }
 
-/// Mesures de la boucle vidéo, pour diagnostiquer les gels d'image : un
-/// écart entre deux frames encodées bien au-delà de l'intervalle cible est
-/// journalisé avec le détail capture / verrou encodeur / encodage.
+/// Thread d'encodage : encode les frames de la file dans l'ordre, jusqu'à
+/// sa fermeture. Retourne Some(message) en cas d'erreur fatale.
+fn encode_loop(
+    rx: std::sync::mpsc::Receiver<QueuedFrame>,
+    encoder_arc: Arc<Mutex<Option<Encoder>>>,
+    frame_count: Arc<AtomicU64>,
+    byte_count: Arc<AtomicU64>,
+) -> Option<String> {
+    let mut stats = EncodeStats::default();
+    let mut error = None;
+    for (yuv, ts_ms) in rx.iter() {
+        let t_lock = Instant::now();
+        let mut guard = encoder_arc.lock().unwrap_or_else(|p| p.into_inner());
+        let lock_ms = t_lock.elapsed().as_secs_f64() * 1000.0;
+        let Some(enc) = guard.as_mut() else { continue };
+        match enc.push_yuv_frame(yuv, ts_ms) {
+            Ok(timing) => {
+                frame_count.fetch_add(1, Ordering::Relaxed);
+                byte_count.store(enc.bytes_written(), Ordering::Relaxed);
+                stats.record(ts_ms, lock_ms, timing);
+            }
+            Err(e) => {
+                error = Some(format!("Encodage vidéo : {e}"));
+                break;
+            }
+        }
+    }
+    stats.log_summary();
+    error
+}
+
+/// Mesures côté capture : un écart entre deux frames capturées bien au-delà
+/// de l'intervalle cible signale une capture bloquée (gel d'image visible).
 #[derive(Default)]
-struct LoopStats {
+struct CaptureStats {
     frames: u64,
     last_ts: Option<u64>,
-    /// Durée d'encodage de la frame précédente : un gel entre deux frames
-    /// = encodage de la précédente + capture et verrou de la courante.
-    prev_encode_ms: f64,
     stalls: u64,
-    encode_total_ms: f64,
-    encode_max_ms: f64,
+    /// Frames abandonnées faute de place dans la file d'encodage.
+    dropped: u64,
+    convert_total_ms: f64,
 }
 
-impl LoopStats {
-    /// Écart au-delà duquel une frame encodée compte comme un gel.
-    const STALL_MS: u64 = 200;
+/// Écart au-delà duquel on journalise un gel ou un appel lent.
+const STALL_MS: u64 = 200;
 
-    fn record(&mut self, ts_ms: u64, interval_ms: f64, capture_ms: f64, lock_ms: f64, encode_ms: f64) {
+impl CaptureStats {
+    fn record(&mut self, ts_ms: u64, interval_ms: f64, capture_ms: f64, convert_ms: f64) {
         if let Some(last) = self.last_ts {
             let gap = ts_ms.saturating_sub(last);
-            if gap > Self::STALL_MS.max(interval_ms as u64 * 3) {
+            if gap > STALL_MS.max(interval_ms as u64 * 3) {
                 self.stalls += 1;
                 log::warn!(
-                    "Vidéo · gel de {gap} ms à t={ts_ms} ms : encodage frame précédente {:.0} ms, \
-                     puis capture {capture_ms:.0} ms, verrou encodeur {lock_ms:.0} ms",
-                    self.prev_encode_ms,
+                    "Vidéo · gel de capture de {gap} ms à t={ts_ms} ms (capture {capture_ms:.0} ms, \
+                     conversion {convert_ms:.0} ms)"
                 );
             }
         }
         self.last_ts = Some(ts_ms);
-        self.prev_encode_ms = encode_ms;
         self.frames += 1;
-        self.encode_total_ms += encode_ms;
-        self.encode_max_ms = self.encode_max_ms.max(encode_ms);
+        self.convert_total_ms += convert_ms;
     }
 
     fn log_summary(&self) {
@@ -388,12 +446,53 @@ impl LoopStats {
             return;
         }
         log::info!(
-            "Vidéo · {} frames, encodage moyen {:.1} ms (max {:.0} ms), {} gel(s) > {} ms",
+            "Vidéo · capture : {} frames, conversion moyenne {:.1} ms, {} gel(s) > {} ms, {} frame(s) abandonnée(s) (file pleine)",
             self.frames,
-            self.encode_total_ms / self.frames as f64,
-            self.encode_max_ms,
+            self.convert_total_ms / self.frames as f64,
             self.stalls,
-            Self::STALL_MS,
+            STALL_MS,
+            self.dropped,
+        );
+    }
+}
+
+/// Mesures côté encodage : un appel lent n'est plus un gel d'image (la
+/// capture continue), mais le journaliser aide à dimensionner la file.
+#[derive(Default)]
+struct EncodeStats {
+    frames: u64,
+    slow: u64,
+    total_ms: f64,
+    max_ms: f64,
+}
+
+impl EncodeStats {
+    fn record(&mut self, ts_ms: u64, lock_ms: f64, t: EncodeTiming) {
+        let ms = lock_ms + t.send_ms + t.write_ms;
+        if ms > STALL_MS as f64 {
+            self.slow += 1;
+            log::warn!(
+                "Encodeur · appel lent de {ms:.0} ms pour t={ts_ms} ms (verrou {lock_ms:.0} ms, \
+                 send_frame {:.0} ms, écriture {:.0} ms)",
+                t.send_ms, t.write_ms,
+            );
+        }
+        self.frames += 1;
+        self.total_ms += ms;
+        self.max_ms = self.max_ms.max(ms);
+    }
+
+    fn log_summary(&self) {
+        if self.frames == 0 {
+            return;
+        }
+        log::info!(
+            "Vidéo · encodage : {} frames, moyenne {:.1} ms (max {:.0} ms), {} appel(s) > {} ms",
+            self.frames,
+            self.total_ms / self.frames as f64,
+            self.max_ms,
+            self.slow,
+            STALL_MS,
         );
     }
 }
